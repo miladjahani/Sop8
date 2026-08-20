@@ -1,0 +1,104 @@
+name: Deploy MiSub CF-Optimizer to GitHub Pages
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: 'pages'
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Detect Project & Install Dependencies
+        id: prepare
+        run: |
+          echo "=== Listing Repository Root Contents ==="
+          ls -la
+
+          # Search for package.json anywhere in the repository
+          FOUND=$(find . -name "package.json" -not -path "*/node_modules/*" | head -n 1)
+          
+          if [ -n "$FOUND" ]; then
+            TARGET_DIR=$(dirname "$FOUND")
+            echo "Found package.json at: $TARGET_DIR"
+          else
+            echo "package.json not found in repo! Creating default package.json..."
+            TARGET_DIR="."
+            cat << 'JSON_EOF' > package.json
+          {
+            "name": "misub-cf-optimizer",
+            "private": true,
+            "version": "1.0.0",
+            "type": "module",
+            "scripts": {
+              "dev": "vite",
+              "build": "vite build",
+              "preview": "vite preview"
+            },
+            "dependencies": {
+              "vue": "^3.4.21"
+            },
+            "devDependencies": {
+              "@vitejs/plugin-vue": "^5.0.4",
+              "vite": "^5.2.8"
+            }
+          }
+          JSON_EOF
+          fi
+
+          echo "TARGET_DIR=$TARGET_DIR" >> $GITHUB_OUTPUT
+          echo "TARGET_DIR=$TARGET_DIR" >> $GITHUB_ENV
+
+          cd "$TARGET_DIR"
+          npm install
+
+      - name: Build Web Application
+        run: |
+          cd "${{ steps.prepare.outputs.TARGET_DIR }}"
+          npm run build || npx vite build
+          
+          if [ -d "dist" ]; then
+            touch dist/.nojekyll
+            if [ -f "dist/index.html" ]; then
+              cp dist/index.html dist/404.html
+            fi
+            echo "BUILD_DIR=${{ steps.prepare.outputs.TARGET_DIR }}/dist" >> $GITHUB_ENV
+          else
+            touch .nojekyll
+            cp index.html 404.html
+            echo "BUILD_DIR=${{ steps.prepare.outputs.TARGET_DIR }}" >> $GITHUB_ENV
+          fi
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Build Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ env.BUILD_DIR }}
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

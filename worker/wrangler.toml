@@ -1,0 +1,8 @@
+name = "misub-cf-proxy-worker"
+main = "worker.js"
+# 2024-04-03+ is required for the native `cloudflare:sockets` TCP Sockets API
+# used by the real TCP-handshake probe engine in worker.js.
+compatibility_date = "2024-09-23"
+
+[vars]
+ENVIRONMENT = "production"

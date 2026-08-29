@@ -1,93 +1,146 @@
-# ⚡ MiSub & CF-Optimizer Authentic Master Suite (Vue 3 PWA)
+# ⚡ MiSub & CF-Optimizer — Ultra Edition v3.5
 
 [![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20PWA-blue?style=for-the-badge&logo=github)](https://github.com/)
-[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers%20Ready-f38020?style=for-the-badge&logo=cloudflare)](https://workers.cloudflare.com/)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers%20v6.0-f38020?style=for-the-badge&logo=cloudflare)](https://workers.cloudflare.com/)
+[![Vue 3](https://img.shields.io/badge/Vue-3.5-42b883?style=for-the-badge&logo=vue.js)](https://vuejs.org/)
+[![Pinia](https://img.shields.io/badge/Pinia-State-ffd859?style=for-the-badge)](https://pinia.vuejs.org/)
 [![PWA Ready](https://img.shields.io/badge/PWA-Installable-purple?style=for-the-badge&logo=pwa)](https://web.dev/progressive-web-apps/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-> سامانه اصیل، ماژولار و جامع بر پایه **Vue 3 و ساختار اصلی MiSub** که پیرامون **هسته بهینه‌ساز کانکشن (CF-Optimizer)** ادغام شده و از **اسکنر موازی واقعی PBP (Parallel Batch Probe)** روی مخزن ۳,۸۰۰+ آی‌پی واقعی کلودفلر تغذیه می‌کند.
-
-## ✅ نسخه ۵.۰ — موتور کاملاً واقعی (بدون هیچ داده شبیه‌سازی‌شده)
-
-نسخه‌های قبلی در برخی مسیرهای شکست (fallback) از اعداد تصادفی برای شبیه‌سازی تاخیر استفاده می‌کردند. در این نسخه تمام مسیرهای اندازه‌گیری با تکنیک‌های واقعی جایگزین شده‌اند:
-
-- **پروب واقعی TCP (Edge):** ورکر با API بومی `cloudflare:sockets` یک هندشیک TCP واقعی به `ip:port` باز می‌کند و زمان واقعی آن را اندازه می‌گیرد — نه یک عدد ساختگی.
-- **تایید واقعی Colo/دیتاسنتر:** با `fetch(..., { cf: { resolveOverride: ip } })` اتصال TLS واقعی به همان آی‌پی کاندید باز می‌شود؛ موفقیت این هندشیک اثبات می‌کند آی‌پی واقعاً متعلق به کلودفلر است، و پاسخ `cdn-cgi/trace` کد Colo واقعی (مثلاً `FRA`, `DXB`, `IST`) را برمی‌گرداند.
-- **اسکنر دسته‌ای موازی PBP:** اندپوینت `/api/scan/batch` صدها آی‌پی را هم‌زمان (با محدودیت concurrency) در Edge پروب می‌کند — سریع، دقیق و بدون محدودیت CORS مرورگر.
-- **پروب محلی صادقانه:** وقتی ورکر تنظیم نشده، پروب از خود مرورگر انجام می‌شود؛ در صورت شکست اندازه‌گیری، به‌جای عدد ساختگی مقدار `null` و وضعیت `error` بازگردانده می‌شود.
-- **تست سرعت واقعی:** دانلود از طریق پراکسی استریم ورکر (`/api/speedtest-proxy`) با همان تکنیک `resolveOverride` انجام می‌شود؛ بایت‌های واقعی از آی‌پی کاندید عبور می‌کنند و سرعت از روی زمان دریافت واقعی محاسبه می‌شود.
-- **یابنده پورت واقعی CF-Optimizer:** اندپوینت `/api/probe/ports` تمام پورت‌های استاندارد کلودفلر را با هندشیک TCP واقعی تست می‌کند و سریع‌ترین پورت واقعاً پاسخ‌گو را برمی‌گرداند.
-- **DoH صادقانه:** در صورت عدم پاسخ هیچ resolver، به‌جای IP ثابت جعلی، نتیجه خالی و پیام خطای واقعی نمایش داده می‌شود.
-
-> ⚠️ برای فعال شدن موتور Edge (پروب TCP واقعی، Colo، تست سرعت واقعی، یابنده پورت) لازم است آدرس Cloudflare Worker خود را در تب «تنظیمات» وارد کنید. بدون آن، برنامه فقط از پروب محلی مرورگر استفاده می‌کند (کندتر و بدون اطلاعات Colo).
+> سامانه جامع بهینه‌ساز اتصالات کلودفلر با الهام از **[MiSub](https://github.com/imzyb/MiSub)** — ترکیب قابلیت‌های پیشرفته بک‌اند با رابط کاربری شیشه‌ای (Glassmorphism) تلگرامی
 
 ---
 
-## 🌟 ساختار ادغام‌شده پیرامون هسته بهینه‌ساز (CF-Optimizer Core)
+## ✨ ویژگی‌های کلیدی
+
+### 🔧 بهینه‌ساز اتصال (CF-Optimizer Core)
+- **پروب TCP واقعی** با `cloudflare:sockets` — نه شبیه‌سازی
+- **تایید Colo/دیتاسنتر** با `resolveOverride` واقعی
+- **اسکنر موازی PBP** — صدها آی‌پی هم‌زمان در Edge
+- **یابنده پورت** — تست تمام پورت‌های کلودفلر با هندشیک TCP
+- **تست سرعت واقعی** — دانلود بایت واقعی از آی‌پی کاندید
+
+### 📋 مدیریت سابسکریپشن
+- **پارس پروتکل‌ها:** VLESS, VMess, Trojan, SS, Hysteria2, TUIC, SOCKS
+- **تشخیص منطقه** با ایموجی پرچم (۴۰+ کشور)
+- **زنجیره عملگرها:** فیلتر، مرتب‌سازی، حذف تکرار، تغییر نام
+- **تولید لینک ساب واقعی** از طریق Worker `/sub`
+- **اتصال EDT-Pages/Proxy-List** با داده غنی (کشور، شهر، ASN)
+
+### 🎨 رابط کاربری
+- **تم شیشه‌ای (Glassmorphism)** — مشابه وب‌اپ تلگرام
+- **Vue Router** با lazy-loading و transition
+- **Pinia** برای مدیریت state با persist
+- **کامپوننت‌های قابل استفاده مجدد:** BaseButton, BaseSwitch
+- **طراحی RTL** فارسی با پشتیبانی موبایل
+
+### ☁️ بک‌اند Cloudflare Worker v6.0
+- **۱۴+ اندپوینت** REST API
+- **Rate Limiting** هوشمند per-IP
+- **پشتیبانی چند پروتکل:** TCP probe, GeoIP, DoH, Speedtest
+- **خروجی‌ها:** Base64, Clash Meta, Sing-box JSON
+
+---
+
+## 🏗️ ساختار پروژه
 
 ```text
- ┌───────────────────────────────────┐       ┌───────────────────────────────────┐
- │   1. مخزن سابسکریپشن (MiSub)       │       │ 2. اسکنر آی‌پی (Clean-IP-Scanner) │
- │  - پارس VLESS / VMess / Trojan    │       │  - مخزن ۳,۸۰۰+ رنج‌های Anycast    │
- │  - حذف تکراری‌ها (Deduplication)  │       │  - پینگ، جیتر و پکت‌لاس واقعی    │
- │  - مبدل کلاینت (Clash / Singbox)  │       │  - تست سرعت دانلود (MB/s)         │
- └─────────────────┬─────────────────┘       └─────────────────┬─────────────────┘
-                   │                                           │
-                   │ (کانفیگ‌های خام)                          │ (آی‌پی‌های تمیز تست‌شده)
-                   ▼                                           ▼
- ┌───────────────────────────────────────────────────────────────────────────────┐
- │               ⚡ هسته مرکزی: بهینه‌ساز کانکشن (CF-Optimizer Core)              │
- │  - تطبیق خودکار پورت‌های کلودفلر (TLS: 443, 8443, ... | Non-TLS: 80, 8080)   │
- │  - آزمایشگاه پکت‌های فرگمنت (Fragment: Length 10-50, Interval 10-20ms) ضد DPI  │
- │  - تنظیمات پیشرفته SNI، هدر Host و پیشوند نام نودها                           │
- │  - تولید بارکد QR برای اسکن فوری در کلاینت‌های موبایل                         │
- └───────────────────────────────────────┬───────────────────────────────────────┘
-                                         │
-                                         ▼
- ┌───────────────────────────────────────────────────────────────────────────────┐
- │                        خروجی‌های نهایی و توزیع چندگانه                         │
- │  1. لینک سابسکریپشن مستقیم از Cloudflare Worker (/sub?url=...&ip=...)        │
- │  2. خروجی کلاینت Clash Meta (Mihomo YAML) با گروه‌های خودکار                  │
- │  3. خروجی کلاینت Sing-box (JSON) با Outbounds بهینه‌شده                      │
- │  4. فرمت استاندارد V2Ray Base64                                               │
- └───────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│                   Frontend (Vue 3)                   │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │
+│  │ بهینه‌ساز │ │  اسکنر   │ │  ساب     │ │ ابزارها│ │
+│  │  ⚡       │ │   🧪     │ │   📋     │ │  🌐    │ │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───┬────┘ │
+│       │             │            │            │      │
+│  ┌────┴─────────────┴────────────┴────────────┴────┐ │
+│  │          Pinia Store + Vue Router                │ │
+│  └─────────────────────┬───────────────────────────┘ │
+└────────────────────────┼────────────────────────────┘
+                         │ API Calls
+┌────────────────────────┼────────────────────────────┐
+│              Cloudflare Worker v6.0                  │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │
+│  │TCP Probe │ │Geo Parser│ │Node Parse│ │  /sub  │ │
+│  │  🔌      │ │  🌍      │ │  📋      │ │  🔗   │ │
+│  └──────────┘ └──────────┘ └──────────┘ └────────┘ │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │
+│  │Batch Scan│ │Speedtest │ │  DoH     │ │ GeoIP  │ │
+│  │  📡      │ │  📊      │ │  🌐      │ │  🗺️   │ │
+│  └──────────┘ └──────────┘ └──────────┘ └────────┘ │
+└─────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🚀 راهنمای استقرار در GitHub Pages
+## 🚀 استقرار
 
-1. مخزن را در گیت‌هاب ایجاد و فایل‌ها را روی شاخه `main` پوش کنید.
-2. به بخش **Settings** > **Pages** بروید و Source را روی **GitHub Actions** بگذارید.
-3. اکشن `.github/workflows/deploy.yml` به صورت خودکار پروژه را با Node 22 بیلد و منتشر می‌کند.
+### GitHub Pages (Frontend)
+1. مخزن را روی شاخه `main` پوش کنید
+2. **Settings → Pages → Source → GitHub Actions**
+3. اکشن خودکار build و deploy می‌کند
+4. آدرس: `https://username.github.io/Sop8/`
 
----
+### Cloudflare Worker (Backend)
+```bash
+cd worker
+# روش ۱: از طریق Dashboard
+# کد worker.js را در Cloudflare Dashboard کپی کنید
 
-## ☁️ استقرار بک‌اند Cloudflare Worker
-
-1. در داشبورد [Cloudflare Workers](https://dash.cloudflare.com/) یک ورکر بسازید (یا با `wrangler deploy` از پوشه `worker/` مستقیم دیپلوی کنید).
-2. تمام کدهای فایل `worker/worker.js` را داخل آن قرار داده و Deploy کنید. `compatibility_date` باید حداقل `2024-04-03` باشد تا API بومی `cloudflare:sockets` (پروب واقعی TCP) در دسترس باشد — این مقدار در `wrangler.toml` از پیش تنظیم شده.
-3. آدرس ورکر را در تب **تنظیمات** برنامه وارد نمایید.
-
-### اندپوینت‌های واقعی ورکر
-
-| مسیر | کاربرد |
-|---|---|
-| `GET /api/probe?ip=&port=` | پروب واقعی TCP (و اختیاراً `&colo=1` برای تایید دیتاسنتر) |
-| `GET /api/probe/ports?ip=&ports=` | تست موازی چند پورت واقعی روی یک آی‌پی (یابنده سریع‌ترین پورت) |
-| `POST /api/scan/batch` | اسکنر موازی PBP — `{ ips:[], port, mode: 'tcp'|'colo'|'both', concurrency }` |
-| `GET /api/speedtest-proxy?ip=&bytes=` | پراکسی استریم برای تست سرعت دانلود واقعی |
-| `GET /api/ip/verify?ip=` | بررسی اینکه آیا آی‌پی واقعاً در رنج‌های رسمی کلودفلر است |
-| `GET/POST /api/proxy-fetch` | دریافت سابسکریپشن بدون محدودیت CORS |
-| `GET /api/doh` , `GET /api/geoip` , `GET /sub` | ابزارهای شبکه و لینک ساب مستقیم |
+# روش ۲: از طریق Wrangler
+npx wrangler deploy
+```
 
 ---
 
-## 📱 اجرا در محیط Termux (اندروید)
+## 📡 اندپوینت‌های Worker v6.0
+
+| مسیر | متد | کاربرد |
+|---|---|---|
+| `/api/probe?ip=&port=&colo=1` | GET | پروب TCP واقعی + تایید Colo |
+| `/api/probe/ports?ip=&ports=` | GET | تست موازی چند پورت |
+| `/api/scan/batch` | POST | اسکنر موازی PBP (حداکثر ۵۰۰ IP) |
+| `/api/speedtest-proxy?ip=&bytes=` | GET | تست سرعت دانلود واقعی |
+| `/api/doh?name=&provider=` | GET | DNS over HTTPS |
+| `/api/geoip?ip=` | GET | استعلام GeoIP تکی |
+| `/api/geoip/batch` | POST | استعلام GeoIP دسته‌ای |
+| `/api/ip/ranges` | GET | لیست CIDR رسمی کلودفلر |
+| `/api/ip/verify?ip=` | GET | تایید آی‌پی کلودفلر |
+| `/api/proxy-fetch?url=` | GET | دریافت ساب بدون CORS |
+| `/sub?url=&ip=&port=&sni=&fp=` | GET | تولید لینک ساب بهینه‌شده |
+| `/api/nodes/parse` | POST | پارس متن ساب به نودهای ساختاریافته |
+| `/api/nodes/optimize` | POST | اعمال عملگرها + IP تمیز |
+| `/api/nodes/regions?url=` | GET | استخراج منطقه‌های ساب |
+| `/api/ping` | GET | سلامت سرور |
+
+---
+
+## 🛠️ توسعه محلی
 
 ```bash
-cd misub-cf-suite
-chmod +x setup-termux.sh
-./setup-termux.sh
-npm run dev
+# نصب وابستگی‌ها
+bun install
+
+# اجرای dev server
+bun run dev
+
+# بیلد برای production
+bun run build
+
+# پیش‌نمایش build
+bun run preview
 ```
+
+### وابستگی‌ها
+
+| پکیج | نسخه | کاربرد |
+|---|---|---|
+| `vue` | ^3.5 | فریمورک UI |
+| `pinia` | ^4.0 | مدیریت state |
+| `vue-router` | ^5.3 | مسیریابی |
+| `pinia-plugin-persistedstate` | ^4.7 | ذخیره state |
+| `vite` | ^5.4 | بیلدر |
+
+---
+
+## 📄 لایسنس
+
+MIT License

@@ -79,6 +79,9 @@
       </div>
     </div>
 
+    <!-- Operator Chain -->
+    <OperatorChain v-if="parsedNodes.length" :nodes="filteredNodes" @update:nodes="onNodesUpdate" />
+
     <!-- Sub-panels -->
     <NodeDoctorPanel v-if="showDoctor && parsedNodes.length" :nodes="filteredNodes" />
     <ClientConverterWorkspace v-if="showConverter && parsedNodes.length" :nodes="filteredNodes" />
@@ -116,6 +119,7 @@ import { useSubscriptions } from '../../composables/useSubscriptions';
 import { pingNodeHost } from '../../utils/scanner/scannerEngine';
 import NodeDoctorPanel from './NodeDoctorPanel.vue';
 import ClientConverterWorkspace from './ClientConverterWorkspace.vue';
+import OperatorChain from './OperatorChain.vue';
 
 const emit = defineEmits(['send-to-optimizer', 'select-node-to-optimize']);
 
@@ -135,6 +139,11 @@ const {
 
 const showDoctor = ref(false);
 const showConverter = ref(false);
+
+const onNodesUpdate = (newNodes) => {
+  // Emit optimized nodes back
+  emit('send-to-optimizer', newNodes.map(n => n.raw).join('\n'));
+};
 const nodePings = ref({});
 const testingPings = ref(false);
 const nodeLogs = ref([]);

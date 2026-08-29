@@ -1,15 +1,20 @@
 /**
- * MiSub & CF-Optimizer — Real Edge Backend (v5.1.0)
+ * MiSub & CF-Optimizer — Real Edge Backend (v6.0.0)
  * ----------------------------------------------------------------
- * Improved version with:
- * - Enhanced /sub endpoint (VLESS, Trojan, VMess, SS, Hysteria2)
+ * Major upgrade inspired by MiSub:
+ * - Full node parsing (VLESS, VMess, Trojan, SS, Hysteria2, TUIC)
+ * - Region detection with emoji flags
+ * - Operator chain (filter/sort/dedup/rename)
+ * - Enhanced /sub with node processing pipeline
  * - Rate limiting for scan endpoints
  * - GeoIP caching (KV-backed)
- * - Better error messages
- * - Input validation & sanitization
+ * - Access logging & cache headers
  */
 
 import { connect } from 'cloudflare:sockets';
+import { extractRegion, countryCodeToFlag, getUniqueRegions } from './geo-utils.js';
+import { parseNodeUrl, parseSubscription } from './node-parser.js';
+import { runOperatorChain } from './operator-runner.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -330,7 +335,7 @@ export default {
         return jsonResponse({
           status: 'online',
           service: 'MiSub & CF-Optimizer Real Edge Backend',
-          version: '5.1.0',
+          version: '6.0.0',
           engines: ['tcp-socket-probe', 'resolveOverride-colo-probe', 'parallel-batch-scanner', 'streaming-speedtest-proxy'],
           endpoints: ['/api/probe', '/api/probe/ports', '/api/scan/batch', '/api/speedtest-proxy', '/api/doh', '/api/geoip', '/api/geoip/batch', '/api/ip/ranges', '/api/ip/verify', '/sub', '/api/ping']
         });
@@ -591,12 +596,111 @@ export default {
         });
       }
 
-      // 11. Ping
-      if (pathname === '/api/ping') {
-        return jsonResponse({ success: true, timestamp: Date.now(), version: '5.1.0' });
+      // 11. Parse nodes from text
+      if (pathname === '/api/nodes/parse' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const text = body.text || body.content || '';
+        if (!text) return jsonResponse({ success: false, error: 'text is required' }, 400);
+
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+        const nodes = lines.map(parseNodeUrl).filter(Boolean);
+        const regions = getUniqueRegions(nodes.map(n => n.name));
+
+        return jsonResponse({
+          success: true,
+          total: lines.length,
+          parsed: nodes.length,
+          regions,
+          nodes: nodes.map(n => ({
+            name: n.name, type: n.type, server: n.server, port: n.port,
+            region: extractRegion(n.name)
+          }))
+        });
       }
 
-      return jsonResponse({ error: 'Not Found', availableEndpoints: ['/api/probe', '/api/probe/ports', '/api/scan/batch', '/api/speedtest-proxy', '/api/doh', '/api/geoip', '/api/geoip/batch', '/api/ip/ranges', '/api/ip/verify', '/sub', '/api/ping'] }, 404);
+      // 12. Optimize nodes with operator chain
+      if (pathname === '/api/nodes/optimize' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const text = body.text || body.content || '';
+        const operators = Array.isArray(body.operators) ? body.operators : [];
+        const cleanIp = body.ip || body.cleanIp;
+        const cleanPort = body.port || body.cleanPort;
+        const customSni = body.sni;
+
+        if (!text) return jsonResponse({ success: false, error: 'text is required' }, 400);
+
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+        let nodes = lines.map(parseNodeUrl).filter(Boolean);
+        nodes = runOperatorChain(nodes, operators);
+
+        // Apply clean IP if provided
+        if (cleanIp) {
+          nodes = nodes.map(n => {
+            if (n.type === 'vless' || n.type === 'trojan' || n.type === 'vmess') {
+              const newUrl = n.url
+                .replace(/@[\w.-]+:\d+/, `@${cleanIp}:${cleanPort || n.port}`)
+                .replace(/host=[\w.-]+/, `host=${n.host || n.server}`)
+                .replace(/sni=[\w.-]+/, `sni=${customSni || n.sni || n.server}`);
+              return { ...n, url: newUrl, server: cleanIp, port: parseInt(cleanPort) || n.port };
+            }
+            return n;
+          });
+        }
+
+        const regions = getUniqueRegions(nodes.map(n => n.name));
+        const outBase64 = btoa(unescape(encodeURIComponent(nodes.map(n => n.url).join('\n'))));
+
+        return jsonResponse({
+          success: true,
+          total: lines.length,
+          optimized: nodes.length,
+          regions,
+          optimizedBase64: outBase64,
+          nodes: nodes.map(n => ({
+            name: n.name, type: n.type, server: n.server, port: n.port,
+            region: extractRegion(n.name)
+          }))
+        });
+      }
+
+      // 13. Get unique regions from subscription
+      if (pathname === '/api/nodes/regions') {
+        const targetUrl = url.searchParams.get('url');
+        if (!targetUrl) return jsonResponse({ success: false, error: 'url is required' }, 400);
+
+        try {
+          const subRes = await fetch(targetUrl, {
+            headers: { 'User-Agent': request.headers.get('User-Agent') || 'v2rayNG/1.8.12' },
+            redirect: 'follow'
+          });
+          if (!subRes.ok) return jsonResponse({ success: false, error: `HTTP ${subRes.status}` }, 502);
+
+          let rawData = await subRes.text();
+          try { rawData = decodeURIComponent(escape(atob(rawData.trim()))); } catch {}
+
+          const nodes = parseSubscription(rawData);
+          const regions = getUniqueRegions(nodes.map(n => n.name));
+
+          return jsonResponse({
+            success: true,
+            total: nodes.length,
+            regions: regions.map(r => ({
+              name: r,
+              emoji: extractRegion(r + 'test').emoji,
+              count: nodes.filter(n => extractRegion(n.name).region === r).length
+            }))
+          });
+        } catch (e) {
+          return jsonResponse({ success: false, error: e.message }, 502);
+        }
+      }
+
+      // 14. Ping
+      if (pathname === '/api/ping') {
+        return jsonResponse({ success: true, timestamp: Date.now(), version: '6.0.0' });
+      }
+
+      return jsonResponse({ error: 'Not Found', availableEndpoints: ['/api/probe', '/api/probe/ports', '/api/scan/batch', '/api/speedtest-proxy', '/api/doh', '/api/geoip', '/api/geoip/batch', '/api/ip/ranges', '/api/ip/verify', '/sub', '/api/nodes/parse', '/api/nodes/optimize', '/api/nodes/regions', '/api/ping'] }, 404);
     } catch (e) {
       return jsonResponse({ error: e.message, stack: e.stack }, 500);
     }

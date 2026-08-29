@@ -32,40 +32,41 @@ defineEmits(['select-ip']);
 
 <style scoped>
 .matrix-card {
-  padding: 12px;
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  margin-bottom: 12px;
+  padding: 16px;
 }
 .matrix-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .matrix-header h4 { font-size: 0.9rem; color: var(--accent-cyan); }
-.desc { font-size: 0.75rem; color: var(--text-muted); }
+.desc { font-size: 0.74rem; color: var(--text-muted); }
 .matrix-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
 }
 .matrix-item {
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 8px;
-  padding: 10px;
+  background: rgba(8, 14, 32, 0.50);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: var(--radius-md);
+  padding: 12px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  transition: all 0.2s;
+  gap: 5px;
+  transition: all 0.25s var(--ease-smooth);
 }
 .matrix-item:hover {
-  border-color: var(--accent-cyan);
-  background: #334155;
+  border-color: rgba(56, 189, 248, 0.30);
+  background: rgba(37, 99, 235, 0.10);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.08);
+  transform: translateY(-1px);
 }
-.operator-title { font-size: 0.8rem; font-weight: bold; color: #f8fafc; }
-.ip-preview { font-size: 0.75rem; color: var(--accent-cyan); }
-.count-badge { font-size: 0.68rem; color: var(--text-muted); }
+.operator-title { font-size: 0.78rem; font-weight: 700; color: var(--text-primary); }
+.ip-preview { font-size: 0.74rem; color: var(--accent-cyan); }
+.count-badge { font-size: 0.66rem; color: var(--text-muted); }
 </style>

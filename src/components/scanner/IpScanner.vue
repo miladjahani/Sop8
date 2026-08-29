@@ -1,47 +1,39 @@
 <template>
   <div class="scanner-module">
     <div class="card-header">
-      <h3>🧪 اسکنر پیشرفته آی‌پی کلودفلر (Clean IP Scanner Pro)</h3>
-      <p class="desc">مخزن بیش از ۳,۸۰۰ آی‌پی واقعی کلودفلر؛ اسکنر موازی PBP (Parallel Batch Probe) با هندشیک واقعی TCP و تایید Colo/دیتاسنتر از طریق ورکر، به‌همراه پروب محلی از مرورگر شما</p>
+      <h3>🧪 اسکنر پیشرفته آی‌پی کلودفلر</h3>
+      <p class="desc">مخزن ۳,۸۰۰+ آی‌پی واقعی کلودفلر — اسکن موازی با هندشیک TCP و تایید Colo</p>
     </div>
 
     <div v-if="!hasWorker" class="notice-box card">
-      ⚠️ برای فعال‌سازی اسکن دسته‌ای واقعی در Edge (هندشیک TCP واقعی + تشخیص Colo) آدرس Cloudflare Worker خود را در تب «تنظیمات» وارد کنید. بدون آن، اسکن فقط با پروب محلی مرورگر (کندتر و بدون اطلاعات Colo) انجام می‌شود.
+      ⚠️ برای اسکن دسته‌ای واقعی، آدرس Worker را در تنظیمات وارد کنید.
     </div>
     <div v-else class="notice-box ok card">
-      ✅ اسکن دسته‌ای Edge فعال است — هندشیک TCP واقعی + تایید Colo/دیتاسنتر برای هر آی‌پی از طریق ورکر شما انجام می‌شود.
+      ✅ اسکن دسته‌ای Edge فعال — هندشیک TCP واقعی + تایید Colo
     </div>
 
-    <!-- Pool and Preset Selector -->
+    <!-- Pool Selector -->
     <div class="pool-selector card">
       <div class="selector-header">
-        <span>مخزن و رنج‌های انتخابی:</span>
-        <span class="pool-count font-mono text-cyan">{{ currentPoolCount.toLocaleString() }} آی‌پی آماده</span>
+        <span>مخزن آی‌پی‌ها:</span>
+        <span class="pool-count font-mono text-cyan">{{ currentPoolCount.toLocaleString() }} آی‌پی</span>
       </div>
       <div class="chip-row">
-        <button @click="loadLargePool" class="chip-btn highlight">
-          🌐 بارگذاری مخزن ۳,۸۰۰+ آی‌پی
-        </button>
-        <button @click="generateRandomSample(100)" class="chip-btn">
-          🎲 تولید ۱۰۰ آی‌پی تصادفی
-        </button>
-        <button @click="generateRandomSample(500)" class="chip-btn">
-          🎲 تولید ۵۰۰ آی‌پی تصادفی
-        </button>
-        <button @click="generateRandomSample(1500)" class="chip-btn">
-          🎲 تولید ۱,۵۰۰ آی‌پی تصادفی
-        </button>
-        <button @click="loadOperatorPreset('mci')" class="chip-btn">همراه اول (MCI)</button>
-        <button @click="loadOperatorPreset('mtn')" class="chip-btn">ایرانسل (MTN)</button>
-        <button @click="loadOperatorPreset('rightel')" class="chip-btn">رایتل (Rightel)</button>
-        <button @click="loadOperatorPreset('tci')" class="chip-btn">مخابرات و شاتل</button>
+        <button @click="loadLargePool" class="chip-btn highlight">🌐 بارگذاری مخزن ۳,۸۰۰+</button>
+        <button @click="generateRandomSample(100)" class="chip-btn">🎲 ۱۰۰ آی‌پی</button>
+        <button @click="generateRandomSample(500)" class="chip-btn">🎲 ۵۰۰ آی‌پی</button>
+        <button @click="generateRandomSample(1500)" class="chip-btn">🎲 ۱,۵۰۰ آی‌پی</button>
+        <button @click="loadOperatorPreset('mci')" class="chip-btn">همراه اول</button>
+        <button @click="loadOperatorPreset('mtn')" class="chip-btn">ایرانسل</button>
+        <button @click="loadOperatorPreset('rightel')" class="chip-btn">رایتل</button>
+        <button @click="loadOperatorPreset('tci')" class="chip-btn">مخابرات</button>
       </div>
     </div>
 
-    <!-- Scan Input & Config -->
+    <!-- Scanner Controls -->
     <div class="scanner-controls-grid">
       <div class="form-group card">
-        <label>لیست آی‌پی‌های هدف برای اسکن:</label>
+        <label>لیست آی‌پی‌های هدف:</label>
         <textarea 
           v-model="rawIpsInput" 
           rows="5" 
@@ -53,20 +45,20 @@
       <div class="config-side card">
         <div class="grid-2">
           <div class="form-group">
-            <label>تعداد تِردهای موازی:</label>
+            <label>تِردهای موازی:</label>
             <select v-model="concurrency" class="input-box">
-              <option :value="4">4 تِرد (پایدار)</option>
-              <option :value="8">8 تِرد (پیش‌فرض)</option>
-              <option :value="16">16 تِرد (سریع)</option>
-              <option :value="32">32 تِرد (فوق‌سریع)</option>
+              <option :value="4">4 (پایدار)</option>
+              <option :value="8">8 (پیش‌فرض)</option>
+              <option :value="16">16 (سریع)</option>
+              <option :value="32">32 (فوق‌سریع)</option>
             </select>
           </div>
           <div class="form-group">
-            <label>تایم‌اوت پینگ (میلی‌ثانیه):</label>
+            <label>تایم‌اوت (ms):</label>
             <select v-model="timeoutMs" class="input-box">
-              <option :value="1500">1.5 ثانیه</option>
-              <option :value="2500">2.5 ثانیه</option>
-              <option :value="4000">4.0 ثانیه</option>
+              <option :value="1500">1.5s</option>
+              <option :value="2500">2.5s</option>
+              <option :value="4000">4.0s</option>
             </select>
           </div>
         </div>
@@ -74,10 +66,10 @@
         <div class="action-btn-row">
           <button @click="handleStartScan" :disabled="isScanning" class="btn primary">
             <span v-if="isScanning" class="spinner"></span>
-            {{ isScanning ? `در حال اسکن (${scanProgress.current}/${scanProgress.total})...` : '🚀 شروع اسکن موازی' }}
+            {{ isScanning ? `اسکن (${scanProgress.current}/${scanProgress.total})...` : '🚀 شروع اسکن' }}
           </button>
           <button v-if="isScanning" @click="stopScan" class="btn danger">توقف</button>
-          <button v-if="results.length" @click="exportResultsCsv" class="btn secondary">دانلود خروجی CSV</button>
+          <button v-if="results.length" @click="exportResultsCsv" class="btn secondary">CSV</button>
         </div>
       </div>
     </div>
@@ -87,11 +79,11 @@
       <div class="progress-bar-fill" :style="{ width: progressPercent + '%' }"></div>
     </div>
 
-    <!-- Live Scan Console Logger -->
+    <!-- Live Logs -->
     <div v-if="liveLogs.length" class="terminal-log-box card">
       <div class="terminal-header">
-        <span class="terminal-title">📟 کنسول زنده اسکنر (Live Scan Logs)</span>
-        <button @click="liveLogs = []" class="btn small secondary">پاکسازی لاگ</button>
+        <span class="terminal-title">📟 لاگ زنده اسکنر</span>
+        <button @click="liveLogs = []" class="btn small secondary">پاکسازی</button>
       </div>
       <div class="terminal-logs font-mono">
         <div v-for="(log, idx) in liveLogs.slice(-25)" :key="idx" :class="['log-line', log.type]">
@@ -117,11 +109,11 @@
             <tr>
               <th>#</th>
               <th>آدرس IP</th>
-              <th>میانگین تاخیر</th>
-              <th>Colo / دیتاسنتر</th>
+              <th>تاخیر</th>
+              <th>Colo</th>
               <th>منبع</th>
               <th>وضعیت</th>
-              <th>تست سرعت</th>
+              <th>سرعت</th>
               <th>عملیات</th>
             </tr>
           </thead>
@@ -130,15 +122,13 @@
               <td>{{ idx + 1 }}</td>
               <td class="font-mono text-cyan font-bold">{{ item.ip }}</td>
               <td class="font-mono">
-                <span v-if="item.latency !== null" :class="getLatencyClass(item.latency)">
-                  {{ item.latency }} ms
-                </span>
+                <span v-if="item.latency !== null" :class="getLatencyClass(item.latency)">{{ item.latency }} ms</span>
                 <span v-else-if="item.status === 'testing'" class="text-yellow">تست...</span>
                 <span v-else class="text-red">Timeout</span>
               </td>
               <td class="font-mono text-muted">
                 <span v-if="item.colo" class="text-green">{{ item.colo }}</span>
-                <span v-if="item.crossVerified" title="تایید متقاطع با هدر CF-RAY" class="verified-badge">✓✓</span>
+                <span v-if="item.crossVerified" class="verified-badge">✓✓</span>
                 <span v-if="item.city" class="text-muted"> — {{ item.city }}</span>
                 <span v-if="!item.colo">-</span>
               </td>
@@ -197,9 +187,9 @@ const largePoolIps = ref([]);
 const liveLogs = ref([]);
 const hasWorker = computed(() => !!getWorkerUrl());
 const operatorPresets = ref({
-  mci: { name: 'همراه اول (MCI)', ips: ['104.16.1.1', '104.16.12.1', '172.64.80.1'] },
-  mtn: { name: 'ایرانسل (MTN Irancell)', ips: ['104.16.2.1', '104.17.3.1', '172.67.1.1'] },
-  rightel: { name: 'رایتل (Rightel)', ips: ['104.16.5.1', '104.17.8.1', '172.64.120.1'] },
+  mci: { name: 'همراه اول', ips: ['104.16.1.1', '104.16.12.1', '172.64.80.1'] },
+  mtn: { name: 'ایرانسل', ips: ['104.16.2.1', '104.17.3.1', '172.67.1.1'] },
+  rightel: { name: 'رایتل', ips: ['104.16.5.1', '104.17.8.1', '172.64.120.1'] },
   tci: { name: 'مخابرات و شاتل', ips: ['104.16.100.1', '104.17.150.1', '172.67.150.1'] }
 });
 
@@ -211,65 +201,41 @@ onMounted(async () => {
   } catch {
     largePoolIps.value = generateRandomCloudflareIps(500);
   }
-
   try {
     const opRes = await fetch('./data/operator-presets.json');
     operatorPresets.value = await opRes.json();
   } catch {}
 });
 
-const currentPoolCount = computed(() => {
-  return rawIpsInput.value.split('\n').filter(i => i.trim().length > 0).length;
-});
-
+const currentPoolCount = computed(() => rawIpsInput.value.split('\n').filter(i => i.trim().length > 0).length);
 const progressPercent = computed(() => {
   if (!scanProgress.value.total) return 0;
   return Math.round((scanProgress.value.current / scanProgress.value.total) * 100);
 });
 
-const loadLargePool = () => {
-  rawIpsInput.value = largePoolIps.value.slice(0, 1000).join('\n');
-};
-
-const generateRandomSample = (count) => {
-  rawIpsInput.value = generateRandomCloudflareIps(count).join('\n');
-};
-
+const loadLargePool = () => { rawIpsInput.value = largePoolIps.value.slice(0, 1000).join('\n'); };
+const generateRandomSample = (count) => { rawIpsInput.value = generateRandomCloudflareIps(count).join('\n'); };
 const loadOperatorPreset = (key) => {
-  if (operatorPresets.value[key] && operatorPresets.value[key].ips) {
-    rawIpsInput.value = operatorPresets.value[key].ips.join('\n');
-  }
+  if (operatorPresets.value[key]?.ips) rawIpsInput.value = operatorPresets.value[key].ips.join('\n');
 };
 
 const handleStartScan = async () => {
   liveLogs.value = [];
   const nowStr = () => new Date().toTimeString().split(' ')[0];
-  const modeMsg = hasWorker.value
-    ? `شروع اسکن دسته‌ای واقعی در Edge (هندشیک TCP + تایید Colo)...`
-    : `شروع اسکن محلی از مرورگر با ${concurrency.value} تِرد موازی (بدون ورکر، بدون Colo)...`;
+  const modeMsg = hasWorker.value ? 'اسکن دسته‌ای Edge (TCP + Colo)...' : `اسکن محلی با ${concurrency.value} ترد`;
   liveLogs.value.push({ time: nowStr(), message: modeMsg, type: 'info' });
-
   await startScan();
-
-  const ok = results.value.filter(r => r && r.status === 'ok');
-  const withColo = results.value.filter(r => r && r.colo).length;
-  liveLogs.value.push({
-    time: nowStr(),
-    message: `اسکن کامل شد. ${ok.length} آی‌پی تمیز تایید شدند${withColo ? ` (${withColo} با تایید Colo واقعی)` : ''}.`,
-    type: 'success'
-  });
+  const ok = results.value.filter(r => r?.status === 'ok');
+  liveLogs.value.push({ time: nowStr(), message: `اسکن کامل — ${ok.length} آی‌پی تمیز`, type: 'success' });
 };
 
 const exportResultsCsv = () => {
-  const rows = [['IP', 'Latency (ms)', 'Colo', 'City', 'Source', 'Status', 'Speed (MB/s)']];
-  displayResults.value.forEach(r => {
-    rows.push([r.ip, r.latency || '', r.colo || '', r.city || '', r.source || '', r.status, r.speedMbps || '']);
-  });
+  const rows = [['IP', 'Latency', 'Colo', 'City', 'Source', 'Status', 'Speed']];
+  displayResults.value.forEach(r => rows.push([r.ip, r.latency || '', r.colo || '', r.city || '', r.source || '', r.status, r.speedMbps || '']));
   const csvContent = 'data:text/csv;charset=utf-8,' + rows.map(e => e.join(',')).join('\n');
-  const encodedUri = encodeURI(csvContent);
   const link = document.createElement('a');
-  link.setAttribute('href', encodedUri);
-  link.setAttribute('download', `cloudflare_clean_ips_${Date.now()}.csv`);
+  link.setAttribute('href', encodeURI(csvContent));
+  link.setAttribute('download', `cf_ips_${Date.now()}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -283,139 +249,79 @@ const getLatencyClass = (lat) => {
 </script>
 
 <style scoped>
-.scanner-module {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
+.scanner-module { display: flex; flex-direction: column; gap: 16px; }
 .notice-box {
-  font-size: 0.8rem;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: rgba(251, 191, 36, 0.08);
-  border: 1px solid rgba(251, 191, 36, 0.35);
+  font-size: 0.80rem;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: rgba(251, 191, 36, 0.06);
+  border: 1px solid rgba(251, 191, 36, 0.20);
   color: #fbbf24;
 }
 .notice-box.ok {
-  background: rgba(52, 211, 153, 0.08);
-  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(16, 185, 129, 0.06);
+  border-color: rgba(16, 185, 129, 0.20);
   color: #34d399;
 }
-.verified-badge {
-  color: #3ddc84;
-  font-size: 0.65rem;
-  margin-inline-start: 3px;
-  font-weight: 800;
-}
-.pool-selector {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 14px;
-}
+.verified-badge { color: #3ddc84; font-size: 0.65rem; margin-inline-start: 3px; font-weight: 800; }
+
+.pool-selector { padding: 14px; }
 .selector-header {
   display: flex;
   justify-content: space-between;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   margin-bottom: 10px;
-  color: #cbd5e1;
+  color: #b8c9e2;
 }
-.chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip-btn {
-  background: #1e293b;
-  color: #cbd5e1;
-  border: 1px solid #334155;
-  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.50);
+  color: #b8c9e2;
+  border: 1px solid rgba(56, 189, 248, 0.10);
+  border-radius: var(--radius-sm);
   padding: 6px 12px;
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   cursor: pointer;
   transition: all 0.2s;
+  backdrop-filter: blur(6px);
 }
-.chip-btn:hover { background: #334155; color: #fff; }
-.chip-btn.highlight { border-color: var(--accent-cyan); color: var(--accent-cyan); font-weight: bold; }
+.chip-btn:hover { background: rgba(37, 99, 235, 0.15); color: #fff; border-color: rgba(56, 189, 248, 0.25); }
+.chip-btn.highlight { border-color: rgba(56, 189, 248, 0.30); color: var(--accent-cyan); font-weight: 700; }
 
 .scanner-controls-grid {
   display: grid;
   grid-template-columns: 1.2fr 1fr;
   gap: 14px;
 }
-@media (max-width: 768px) {
-  .scanner-controls-grid { grid-template-columns: 1fr; }
-}
+.config-side { display: flex; flex-direction: column; justify-content: space-between; }
+.action-btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 
-.config-side {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-}
-.action-btn-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
+.progress-bar-wrap { width: 100%; height: 4px; background: rgba(30, 41, 59, 0.60); border-radius: 2px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: linear-gradient(90deg, #2563eb, #38bdf8); transition: width 0.3s ease; border-radius: 2px; }
 
-.progress-bar-wrap {
-  width: 100%;
-  height: 6px;
-  background: #1e293b;
-  border-radius: 4px;
-  overflow: hidden;
-}
-.progress-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #0284c7, #38bdf8);
-  transition: width 0.3s ease;
-}
-
-.terminal-log-box {
-  background: #020617;
-  border: 1px solid #334155;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.terminal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.terminal-title {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: var(--accent-cyan);
-}
+.terminal-log-box { padding: 12px; }
+.terminal-header { display: flex; justify-content: space-between; align-items: center; }
+.terminal-title { font-size: 0.78rem; font-weight: 700; color: var(--accent-cyan); }
 .terminal-logs {
-  font-size: 0.75rem;
+  font-size: 0.73rem;
   max-height: 140px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 3px;
+  margin-top: 6px;
 }
 .log-line { display: flex; gap: 8px; }
 .log-time { color: var(--text-muted); }
-.log-line.info .log-msg { color: #94a3b8; }
+.log-line.info .log-msg { color: #8da4c7; }
 .log-line.success .log-msg { color: #34d399; font-weight: 700; }
 .log-line.error .log-msg { color: #f87171; }
 
-.results-box {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.results-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  font-size: 0.85rem;
-}
+.results-box { display: flex; flex-direction: column; gap: 12px; }
+.results-header { display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; }
 .stats { display: flex; gap: 14px; }
+
+@media (max-width: 768px) {
+  .scanner-controls-grid { grid-template-columns: 1fr; }
+}
 </style>

@@ -7,34 +7,25 @@
       @change-tab="switchTab" 
     />
 
-    <!-- Main Workspace Views (Preserved with v-show) -->
+    <!-- Main Workspace Views -->
     <main class="main-content">
       <div class="container">
-        <!-- 1. Dedicated Core View: CF-Optimizer -->
         <OptimizerView 
           v-show="appState.activeTab === 'optimizer'"
           @navigate="switchTab"
         />
-
-        <!-- 2. Dedicated View: Multi-thousand Clean IP Scanner -->
         <ScannerView 
           v-show="appState.activeTab === 'scanner'"
           @navigate="switchTab"
         />
-
-        <!-- 3. Dedicated View: MiSub Subscription Hub -->
         <SubscriptionsView 
           v-show="appState.activeTab === 'misub'"
           @navigate="switchTab"
         />
-
-        <!-- 4. Dedicated View: Network Tools (DoH & GeoIP) -->
         <ToolsView 
           v-show="appState.activeTab === 'tools'"
           @navigate="switchTab"
         />
-
-        <!-- 5. Dedicated View: Cloudflare Worker Settings & Database -->
         <SettingsView 
           v-show="appState.activeTab === 'settings'"
           @navigate="switchTab"
@@ -42,7 +33,7 @@
       </div>
     </main>
 
-    <!-- Mobile Ergonomic Bottom Navigation -->
+    <!-- Mobile Bottom Nav -->
     <MobileNav 
       :current-tab="appState.activeTab" 
       :tabs="tabs" 
@@ -72,11 +63,11 @@ import ToolsView from './views/ToolsView.vue';
 import SettingsView from './views/SettingsView.vue';
 
 const tabs = [
-  { id: 'optimizer', label: '⚡ بهینه‌ساز کانکشن (CF-Optimizer)', shortLabel: 'بهینه‌ساز', icon: '⚡' },
-  { id: 'scanner', label: '🧪 اسکنر ۳,۸۰۰+ آی‌پی', shortLabel: 'اسکنر', icon: '🧪' },
-  { id: 'misub', label: '📋 سابسکریپشن MiSub', shortLabel: 'سابسکریپشن', icon: '📋' },
-  { id: 'tools', label: '🌐 ابزار DoH و GeoIP', shortLabel: 'ابزارها', icon: '🌐' },
-  { id: 'settings', label: '🛠️ دیتابیس و تنظیمات ورکر', shortLabel: 'تنظیمات', icon: '🛠️' }
+  { id: 'optimizer', label: '⚡ بهینه‌ساز', shortLabel: 'بهینه‌ساز', icon: '⚡' },
+  { id: 'scanner', label: '🧪 اسکنر IP', shortLabel: 'اسکنر', icon: '🧪' },
+  { id: 'misub', label: '📋 سابسکریپشن', shortLabel: 'ساب', icon: '📋' },
+  { id: 'tools', label: '🌐 ابزارها', shortLabel: 'ابزارها', icon: '🌐' },
+  { id: 'settings', label: '🛠️ تنظیمات', shortLabel: 'تنظیمات', icon: '🛠️' }
 ];
 
 const switchTab = (tabId) => {
@@ -90,15 +81,14 @@ const switchTab = (tabId) => {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background-color: var(--bg-main);
   padding-bottom: 64px;
 }
 .main-content {
   flex: 1;
-  padding: 16px;
+  padding: 20px;
 }
 .container {
-  max-width: 1140px;
+  max-width: 1200px;
   margin: 0 auto;
 }
 @media (min-width: 769px) {

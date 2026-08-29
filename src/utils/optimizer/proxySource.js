@@ -1,17 +1,17 @@
 /**
- * Real proxy feed source: github.com/roosterkid/openproxylist
+ * Proxy feed sources — dual-repo architecture:
  * ------------------------------------------------------------------
- * This repo publishes continuously-updated (multiple times a day)
- * plain-text lists of live HTTP/SOCKS4/SOCKS5 proxies, one `ip:port`
- * per line. We pull the `_RAW.txt` variants directly from
- * raw.githubusercontent.com — the exact files visible in the repo —
- * and parse real `ip:port` pairs out of them (defensively, in case a
- * line carries extra whitespace-separated columns like country code).
+ * 1. roosterkid/openproxylist — plain-text ip:port lists (HTTP, SOCKS4, SOCKS5)
+ * 2. EDT-Pages/Proxy-List — rich JSON with country, city, ASN, emoji metadata
+ *
+ * The EDT source is preferred because it provides GeoIP-enriched entries
+ * that we can display in the proxy table without additional lookups.
  */
 
-const REPO_OWNER = 'roosterkid';
-const REPO_NAME = 'openproxylist';
-const BRANCH = 'main';
+/* ───── openproxylist (plain text ip:port) ───── */
+const PL_REPO_OWNER = 'roosterkid';
+const PL_REPO_NAME = 'openproxylist';
+const PL_BRANCH = 'main';
 
 export const PROXY_FEEDS = {
   http: { file: 'HTTPS_RAW.txt', label: 'HTTP / HTTPS' },
@@ -19,8 +19,19 @@ export const PROXY_FEEDS = {
   socks5: { file: 'SOCKS5_RAW.txt', label: 'SOCKS5' }
 };
 
-function rawUrl(file) {
-  return `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/${file}`;
+/* ───── EDT-Pages/Proxy-List (rich JSON) ───── */
+const EDT_RAW_BASE = 'https://raw.githubusercontent.com/EDT-Pages/Proxy-List/main/data';
+
+export const EDT_FEEDS = {
+  http:  { file: 'http.json',  label: 'HTTP',  protocol: 'http'  },
+  https: { file: 'https.json', label: 'HTTPS', protocol: 'https' },
+  socks5:{ file: 'socks5.json',label: 'SOCKS5',protocol: 'socks5' }
+};
+
+/* ──── helpers ──── */
+
+function plRawUrl(file) {
+  return `https://raw.githubusercontent.com/${PL_REPO_OWNER}/${PL_REPO_NAME}/${PL_BRANCH}/${file}`;
 }
 
 const IP_PORT_RE = /((?:\d{1,3}\.){3}\d{1,3}):(\d{2,5})\b/;
@@ -41,83 +52,118 @@ function parseIpPortLines(text) {
 }
 
 /**
- * Fetch a live proxy list of the given type directly from the real
- * openproxylist repo. Uses the app's existing robust multi-proxy
- * fetch chain (Worker → direct → public CORS proxies) since GitHub's
- * raw content host is sometimes filtered on restrictive networks.
+ * Parse the EDT-Pages rich JSON proxy list.
+ * Each entry has: proxy, protocol, ip, port, country, country_emoji,
+ * city, asn, asOrganization, latitude, longitude, continent_en, etc.
+ */
+function parseEdtJson(text) {
+  try {
+    const arr = JSON.parse(text);
+    if (!Array.isArray(arr)) return [];
+    const seen = new Set();
+    return arr.filter(p => {
+      if (!p || !p.ip || !p.port) return false;
+      const key = `${p.ip}:${p.port}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).map(p => ({
+      ip: String(p.ip),
+      port: Number(p.port),
+      protocol: p.protocol || 'http',
+      country: p.country || '',
+      countryEmoji: p.country_emoji || '',
+      countryCode: p.country || '',
+      countryEn: p.country_en || '',
+      city: p.city || '',
+      asn: p.asn || '',
+      asOrg: p.asOrganization || '',
+      continent: p.continent_en || '',
+      lat: p.latitude ? Number(p.latitude) : null,
+      lng: p.longitude ? Number(p.longitude) : null
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/* ──── fetch chain (worker → direct → public CORS proxies) ──── */
+
+const PUBLIC_PROXIES = [
+  'https://corsproxy.io/?',
+  'https://api.allorigins.win/raw?url='
+];
+
+async function fetchText(url, workerUrl, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    // 1. Via Worker
+    if (workerUrl) {
+      try {
+        const res = await fetch(`${workerUrl.replace(/\/$/, '')}/api/proxy-fetch?url=${encodeURIComponent(url)}`, { signal: controller.signal });
+        if (res.ok) { clearTimeout(tid); return await res.text(); }
+      } catch { /* fall through */ }
+    }
+
+    // 2. Direct
+    try {
+      const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
+      if (res.ok) { clearTimeout(tid); return await res.text(); }
+    } catch { /* fall through */ }
+
+    // 3. Public CORS proxies
+    for (const prefix of PUBLIC_PROXIES) {
+      try {
+        const res = await fetch(prefix + encodeURIComponent(url));
+        if (res.ok) { clearTimeout(tid); return await res.text(); }
+      } catch { /* try next */ }
+    }
+  } finally {
+    clearTimeout(tid);
+  }
+
+  throw new Error('تمام مسیرهای دریافت ناموفق بودند.');
+}
+
+/* ──── public API ──── */
+
+/**
+ * Fetch plain-text openproxylist feed (existing behaviour).
  */
 export async function fetchProxyFeed(type, workerUrl) {
   const feed = PROXY_FEEDS[type];
   if (!feed) throw new Error('نوع پروکسی نامعتبر است.');
-
-  const url = rawUrl(feed.file);
-
-  // fetchSubscriptionSmart expects VPN-config lines (vless://, trojan://,
-  // etc.) for its "smart extract" step, which won't match plain ip:port
-  // lines — so we call its lower-level fetch chain semantics manually
-  // here instead, but reuse the exact same fallback ordering/behavior.
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
-  try {
-    if (workerUrl) {
-      try {
-        const res = await fetch(`${workerUrl.replace(/\/$/, '')}/api/proxy-fetch?url=${encodeURIComponent(url)}`, { signal: controller.signal });
-        clearTimeout(timeout);
-        if (res.ok) {
-          const txt = await res.text();
-          const list = parseIpPortLines(txt);
-          if (list.length) return { list, via: 'worker' };
-        }
-      } catch { /* fall through */ }
-    }
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  // Direct fetch (raw.githubusercontent.com sends permissive CORS headers,
-  // so this genuinely works from the browser in most cases).
-  try {
-    const res = await fetch(url, { cache: 'no-store' });
-    if (res.ok) {
-      const txt = await res.text();
-      const list = parseIpPortLines(txt);
-      if (list.length) return { list, via: 'direct' };
-    }
-  } catch { /* fall through to public CORS proxies below */ }
-
-  const publicProxies = [
-    'https://corsproxy.io/?',
-    'https://api.allorigins.win/raw?url='
-  ];
-  for (const prefix of publicProxies) {
-    try {
-      const res = await fetch(prefix + encodeURIComponent(url));
-      if (res.ok) {
-        const txt = await res.text();
-        const list = parseIpPortLines(txt);
-        if (list.length) return { list, via: prefix.includes('allorigins') ? 'allorigins' : 'corsproxy.io' };
-      }
-    } catch { /* try next */ }
-  }
-
-  throw new Error('دریافت فهرست پروکسی از openproxylist ناموفق بود — همه مسیرها امتحان شدند.');
+  const url = plRawUrl(feed.file);
+  const text = await fetchText(url, workerUrl);
+  const list = parseIpPortLines(text);
+  if (!list.length) throw new Error('فهرست پروکسی خالی دریافت شد.');
+  return { list, via: workerUrl ? 'worker' : 'direct' };
 }
 
 /**
- * Real liveness check for a batch of fetched proxies: reuses the
- * Worker's genuine TCP-socket probe endpoint (the same one the IP
- * scanner uses) to open a real handshake to each proxy's ip:port —
- * a proxy that doesn't accept a TCP connection can't possibly work,
- * so this is a real, honest pre-filter before the user picks one.
+ * Fetch rich EDT-Pages/Proxy-List JSON feed.
+ * Returns enriched entries with country, city, ASN metadata.
+ */
+export async function fetchEdtFeed(type, workerUrl) {
+  const feed = EDT_FEEDS[type];
+  if (!feed) throw new Error('نوع پروکسی EDT نامعتبر است.');
+  const url = `${EDT_RAW_BASE}/${feed.file}`;
+  const text = await fetchText(url, workerUrl);
+  const list = parseEdtJson(text);
+  if (!list.length) throw new Error('فهرست پروکسی EDT خالی دریافت شد.');
+  return { list, via: workerUrl ? 'worker' : 'direct', source: 'EDT-Pages/Proxy-List' };
+}
+
+/**
+ * Real liveness check for a batch of fetched proxies via Worker TCP probe.
  */
 export async function probeProxyBatch(list, workerUrl, { concurrency = 25, timeoutMs = 20000 } = {}) {
   if (!workerUrl) throw new Error('برای تست زنده بودن پروکسی‌ها، آدرس Worker را وارد کنید.');
-  const ips = list.map(p => p.ip);
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    // Group by port since /api/scan/batch tests one port for the whole batch;
-    // proxy ports vary, so probe distinct ports in separate batched calls.
     const byPort = {};
     list.forEach(p => { (byPort[p.port] = byPort[p.port] || []).push(p.ip); });
 

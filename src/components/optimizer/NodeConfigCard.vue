@@ -1,11 +1,11 @@
 <template>
-  <div class="node-card card">
+  <div class="node-card">
     <div class="node-top">
       <span class="node-idx font-mono">#{{ index + 1 }}</span>
       <span class="node-uri font-mono" :title="uri">{{ uri }}</span>
     </div>
     <div class="node-actions">
-      <button @click="$emit('open-qr', uri)" class="btn small secondary">QR Code</button>
+      <button @click="$emit('open-qr', uri)" class="btn small secondary">QR</button>
       <button @click="$emit('copy', uri)" class="btn small primary">کپی</button>
     </div>
   </div>
@@ -24,10 +24,15 @@ defineEmits(['open-qr', 'copy']);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 12px;
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
+  padding: 10px 14px;
+  background: rgba(8, 14, 32, 0.45);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: var(--radius-md);
   gap: 10px;
+  transition: border-color 0.2s;
+}
+.node-card:hover {
+  border-color: rgba(56, 189, 248, 0.18);
 }
 .node-top {
   display: flex;
@@ -35,9 +40,9 @@ defineEmits(['open-qr', 'copy']);
   gap: 8px;
   overflow: hidden;
 }
-.node-idx { color: var(--accent-cyan); font-weight: bold; font-size: 0.8rem; }
+.node-idx { color: var(--accent-cyan); font-weight: 700; font-size: 0.8rem; }
 .node-uri {
-  color: #94a3b8;
+  color: var(--text-secondary);
   font-size: 0.76rem;
   white-space: nowrap;
   overflow: hidden;

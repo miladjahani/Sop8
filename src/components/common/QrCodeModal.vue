@@ -4,7 +4,7 @@
       <p class="qr-title">{{ title }}</p>
       <div class="qr-image-wrap">
         <img 
-          :src="'https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=' + encodeURIComponent(content)" 
+          :src="'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(content)" 
           alt="QR Code" 
           class="qr-img" 
         />
@@ -27,7 +27,7 @@ const props = defineProps({
 
 const copyText = async () => {
   await navigator.clipboard.writeText(props.content || '');
-  alert('لینک کانفیگ کپی شد.');
+  alert('کپی شد.');
 };
 </script>
 
@@ -36,27 +36,25 @@ const copyText = async () => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   text-align: center;
 }
 .qr-title {
-  font-size: 0.85rem;
-  color: #cbd5e1;
+  font-size: 0.82rem;
+  color: #b8c9e2;
   word-break: break-all;
 }
 .qr-image-wrap {
   background: #fff;
-  padding: 12px;
-  border-radius: 12px;
+  padding: 14px;
+  border-radius: var(--radius-lg);
   display: inline-block;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 .qr-img {
-  width: 200px;
-  height: 200px;
+  width: 180px;
+  height: 180px;
   display: block;
 }
-.qr-actions {
-  display: flex;
-  gap: 8px;
-}
+.qr-actions { display: flex; gap: 8px; }
 </style>

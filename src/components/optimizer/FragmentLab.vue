@@ -1,8 +1,8 @@
 <template>
-  <div class="fragment-lab card">
+  <div class="fragment-lab">
     <div class="lab-header">
-      <h4>🧪 آزمایشگاه FinalMask واقعی (Real TLS Fragment — DPI Bypass)</h4>
-      <p class="desc">این پارامتر <code>fm</code> دقیقاً همان JSON واقعی FinalMask است که کلاینت‌های v2rayNG/PattNG هنگام اتصال می‌خوانند — نه یک فرمت ساختگی.</p>
+      <h4>🧪 آزمایشگاه FinalMask واقعی</h4>
+      <p class="desc">JSON واقعی FinalMask برای کلاینت‌های v2rayNG/PattNG — <code>fm</code></p>
     </div>
 
     <div class="preset-row">
@@ -18,7 +18,7 @@
     </div>
 
     <div class="form-group">
-      <label>JSON خام FinalMask (قابل ویرایش دستی):</label>
+      <label>JSON خام FinalMask:</label>
       <textarea
         :value="fm"
         @input="handleInput($event.target.value)"
@@ -27,7 +27,7 @@
         spellcheck="false"
       ></textarea>
       <p class="validity" :class="isValid ? 'text-green' : 'text-red'">
-        {{ isValid ? '✓ JSON معتبر — آماده استفاده در کانفیگ' : '✗ JSON نامعتبر — اصلاح کنید یا از پریست استفاده کنید' }}
+        {{ isValid ? '✓ JSON معتبر' : '✗ JSON نامعتبر' }}
       </p>
     </div>
   </div>
@@ -43,11 +43,11 @@ const props = defineProps({
 const emit = defineEmits(['update:fm']);
 
 const presets = [
-  { key: 'default', label: 'پیش‌فرض واقعی (دو مرحله‌ای)', value: FM_STR },
-  { key: 'aras', label: 'Aras (سبک — Instagram)', value: ARAS_FM },
+  { key: 'default', label: 'پیش‌فرض (دو مرحله‌ای)', value: FM_STR },
+  { key: 'aras', label: 'Aras (سبک)', value: ARAS_FM },
   {
     key: 'aggressive',
-    label: 'تهاجمی (بایت‌های ریزتر)',
+    label: 'تهاجمی',
     value: '{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","lengths":["1-1"],"delays":["0"],"maxSplit":"0"}},{"type":"fragment","settings":{"packets":"1-3","lengths":["1-1"],"delays":["1"],"maxSplit":"500"}}]}'
   }
 ];
@@ -56,7 +56,7 @@ const activePreset = ref('default');
 
 const isValid = computed(() => {
   const v = (props.fm || '').trim();
-  if (!v) return true; // empty = falls back to real default at build time
+  if (!v) return true;
   try { JSON.parse(v); return true; } catch { return false; }
 });
 
@@ -75,14 +75,16 @@ function handleInput(val) {
 
 <style scoped>
 .fragment-lab {
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
+  background: rgba(8, 14, 32, 0.45);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: var(--radius-md);
   padding: 14px;
+  margin-top: 8px;
 }
 .lab-header { margin-bottom: 10px; }
-.lab-header h4 { color: var(--accent-cyan); font-size: 0.92rem; }
-.desc { font-size: 0.78rem; color: var(--text-secondary); }
-.desc code { color: var(--accent-lime, #c8f135); }
+.lab-header h4 { color: var(--accent-cyan); font-size: 0.90rem; }
+.desc { font-size: 0.76rem; color: var(--text-secondary); margin-top: 2px; }
+.desc code { color: var(--accent-lime); }
 .preset-row {
   display: flex;
   flex-wrap: wrap;

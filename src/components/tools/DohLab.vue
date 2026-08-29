@@ -1,13 +1,13 @@
 <template>
   <div class="doh-card card">
     <div class="doh-header">
-      <h4>🌐 آزمایشگاه DNS-over-HTTPS (DoH Lab)</h4>
-      <p class="desc">تست تفکیک نام دامنه از طریق سرورهای رمزنگاری‌شده DoH کلودفلر و گوگل</p>
+      <h4>🌐 آزمایشگاه DNS-over-HTTPS (DoH)</h4>
+      <p class="desc">تفکیک نام دامنه از طریق سرورهای رمزنگاری‌شده</p>
     </div>
 
     <div class="grid-2">
       <div class="form-group">
-        <label>نام دامنه هدف:</label>
+        <label>دامنه هدف:</label>
         <input v-model="domain" placeholder="speed.cloudflare.com" class="input-box font-mono" />
       </div>
       <div class="form-group">
@@ -22,15 +22,13 @@
 
     <button @click="resolve" :disabled="loading || !domain.trim()" class="btn primary small">
       <span v-if="loading" class="spinner"></span>
-      {{ loading ? 'در حال حل دامنه...' : '🔍 حل نام دامنه (Resolve)' }}
+      {{ loading ? 'حل دامنه...' : '🔍 Resolve' }}
     </button>
 
-    <div v-if="statusMsg" :class="['status-box', statusType]">
-      {{ statusMsg }}
-    </div>
+    <div v-if="statusMsg" :class="['status-box', statusType]">{{ statusMsg }}</div>
 
     <div v-if="resolvedIps.length" class="resolved-results">
-      <span class="label">آی‌پی‌های پاسخ داده شده:</span>
+      <span class="label">آی‌پی‌های پاسخ:</span>
       <div class="ip-chips">
         <span v-for="ip in resolvedIps" :key="ip" class="chip font-mono text-cyan">{{ ip }}</span>
       </div>
@@ -54,19 +52,13 @@ const resolve = async () => {
   loading.value = true;
   statusMsg.value = '';
   resolvedIps.value = [];
-
   try {
     const ips = await resolveDoH(domain.value.trim(), provider.value);
     resolvedIps.value = ips;
-    if (ips.length > 0) {
-      statusMsg.value = `✅ تعداد ${ips.length} آی‌پی با موفقیت دریافت شد.`;
-      statusType.value = 'ok';
-    } else {
-      statusMsg.value = '⚠️ پاسخی از سرور DoH دریافت نشد.';
-      statusType.value = 'err';
-    }
+    statusMsg.value = ips.length > 0 ? `✅ ${ips.length} آی‌پی دریافت شد` : '⚠️ پاسخی دریافت نشد';
+    statusType.value = ips.length > 0 ? 'ok' : 'err';
   } catch (err) {
-    statusMsg.value = `❌ خطا: ${err.message}`;
+    statusMsg.value = `❌ ${err.message}`;
     statusType.value = 'err';
   } finally {
     loading.value = false;
@@ -75,13 +67,19 @@ const resolve = async () => {
 </script>
 
 <style scoped>
-.doh-card { padding: 14px; background: var(--bg-input); border: 1px solid var(--border-color); }
-.doh-header h4 { color: var(--accent-cyan); font-size: 0.92rem; }
-.desc { font-size: 0.78rem; color: var(--text-secondary); margin-top: 2px; }
-.status-box { margin-top: 10px; padding: 6px 10px; border-radius: 6px; font-size: 0.78rem; }
-.status-box.ok { background: #064e3b; color: #34d399; }
-.status-box.err { background: #7f1d1d; color: #fca5a5; }
+.doh-card { padding: 16px; }
+.doh-header h4 { color: var(--accent-cyan); font-size: 0.90rem; }
+.desc { font-size: 0.76rem; color: var(--text-secondary); margin-top: 2px; }
+.status-box { margin-top: 10px; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 0.78rem; }
+.status-box.ok { background: rgba(16, 185, 129, 0.10); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.20); }
+.status-box.err { background: rgba(239, 68, 68, 0.10); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.20); }
 .resolved-results { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .ip-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip { background: #1e293b; border: 1px solid #334155; border-radius: 4px; padding: 4px 8px; font-size: 0.76rem; }
+.chip {
+  background: rgba(8, 14, 32, 0.50);
+  border: 1px solid rgba(56, 189, 248, 0.12);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: 0.74rem;
+}
 </style>

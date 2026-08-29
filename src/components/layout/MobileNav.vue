@@ -27,31 +27,59 @@ defineEmits(['change-tab']);
   bottom: 0;
   left: 0;
   right: 0;
-  height: 60px;
-  background: rgba(15, 23, 42, 0.95);
-  backdrop-filter: blur(16px);
-  border-top: 1px solid var(--border-color);
+  height: 64px;
+  background: rgba(10, 14, 26, 0.85);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border-top: 1px solid rgba(56, 189, 248, 0.08);
   z-index: 50;
+  padding-bottom: env(safe-area-inset-bottom, 0);
 }
 .bottom-btn {
   flex: 1;
   background: none;
   border: none;
-  color: #94a3b8;
+  color: #5a7094;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.25s var(--ease-smooth);
+  position: relative;
 }
-.btn-icon { font-size: 1.15rem; }
-.btn-text { font-size: 0.68rem; font-weight: 500; }
+.bottom-btn:active {
+  transform: scale(0.92);
+}
+.btn-icon {
+  font-size: 1.25rem;
+  transition: transform 0.25s var(--ease-bounce);
+}
+.btn-text {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
 .bottom-btn.active {
   color: var(--accent-cyan);
-  font-weight: 700;
 }
+.bottom-btn.active .btn-icon {
+  transform: translateY(-2px) scale(1.1);
+}
+.bottom-btn.active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+  border-radius: 0 0 3px 3px;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+}
+
 @media (max-width: 768px) {
   .mobile-bottom-nav { display: flex; }
 }

@@ -1,0 +1,3670 @@
+================================================================
+  گزارش کامل تغییرات — MiSub & CF-Optimizer
+  تاریخ: 2026-08-29
+  21 فایل | Glassmorphism + EDT-Pages/Proxy-List
+================================================================
+
+================================================================
+FILE: src/utils/optimizer/proxySource.js
+================================================================
+/**
+ * Proxy feed sources — dual-repo architecture:
+ * ------------------------------------------------------------------
+ * 1. roosterkid/openproxylist — plain-text ip:port lists (HTTP, SOCKS4, SOCKS5)
+ * 2. EDT-Pages/Proxy-List — rich JSON with country, city, ASN, emoji metadata
+ *
+ * The EDT source is preferred because it provides GeoIP-enriched entries
+ * that we can display in the proxy table without additional lookups.
+ */
+
+/* ───── openproxylist (plain text ip:port) ───── */
+const PL_REPO_OWNER = 'roosterkid';
+const PL_REPO_NAME = 'openproxylist';
+const PL_BRANCH = 'main';
+
+export const PROXY_FEEDS = {
+  http: { file: 'HTTPS_RAW.txt', label: 'HTTP / HTTPS' },
+  socks4: { file: 'SOCKS4_RAW.txt', label: 'SOCKS4' },
+  socks5: { file: 'SOCKS5_RAW.txt', label: 'SOCKS5' }
+};
+
+/* ───── EDT-Pages/Proxy-List (rich JSON) ───── */
+const EDT_RAW_BASE = 'https://raw.githubusercontent.com/EDT-Pages/Proxy-List/main/data';
+
+export const EDT_FEEDS = {
+  http:  { file: 'http.json',  label: 'HTTP',  protocol: 'http'  },
+  https: { file: 'https.json', label: 'HTTPS', protocol: 'https' },
+  socks5:{ file: 'socks5.json',label: 'SOCKS5',protocol: 'socks5' }
+};
+
+/* ──── helpers ──── */
+
+function plRawUrl(file) {
+  return `https://raw.githubusercontent.com/${PL_REPO_OWNER}/${PL_REPO_NAME}/${PL_BRANCH}/${file}`;
+}
+
+const IP_PORT_RE = /((?:\d{1,3}\.){3}\d{1,3}):(\d{2,5})\b/;
+
+function parseIpPortLines(text) {
+  const out = [];
+  const seen = new Set();
+  String(text || '').split(/\r?\n/).forEach(line => {
+    const m = line.trim().match(IP_PORT_RE);
+    if (!m) return;
+    const ip = m[1], port = m[2];
+    const key = `${ip}:${port}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ ip, port: Number(port) });
+  });
+  return out;
+}
+
+/**
+ * Parse the EDT-Pages rich JSON proxy list.
+ * Each entry has: proxy, protocol, ip, port, country, country_emoji,
+ * city, asn, asOrganization, latitude, longitude, continent_en, etc.
+ */
+function parseEdtJson(text) {
+  try {
+    const arr = JSON.parse(text);
+    if (!Array.isArray(arr)) return [];
+    const seen = new Set();
+    return arr.filter(p => {
+      if (!p || !p.ip || !p.port) return false;
+      const key = `${p.ip}:${p.port}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).map(p => ({
+      ip: String(p.ip),
+      port: Number(p.port),
+      protocol: p.protocol || 'http',
+      country: p.country || '',
+      countryEmoji: p.country_emoji || '',
+      countryCode: p.country || '',
+      countryEn: p.country_en || '',
+      city: p.city || '',
+      asn: p.asn || '',
+      asOrg: p.asOrganization || '',
+      continent: p.continent_en || '',
+      lat: p.latitude ? Number(p.latitude) : null,
+      lng: p.longitude ? Number(p.longitude) : null
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/* ──── fetch chain (worker → direct → public CORS proxies) ──── */
+
+const PUBLIC_PROXIES = [
+  'https://corsproxy.io/?',
+  'https://api.allorigins.win/raw?url='
+];
+
+async function fetchText(url, workerUrl, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    // 1. Via Worker
+    if (workerUrl) {
+      try {
+        const res = await fetch(`${workerUrl.replace(/\/$/, '')}/api/proxy-fetch?url=${encodeURIComponent(url)}`, { signal: controller.signal });
+        if (res.ok) { clearTimeout(tid); return await res.text(); }
+      } catch { /* fall through */ }
+    }
+
+    // 2. Direct
+    try {
+      const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
+      if (res.ok) { clearTimeout(tid); return await res.text(); }
+    } catch { /* fall through */ }
+
+    // 3. Public CORS proxies
+    for (const prefix of PUBLIC_PROXIES) {
+      try {
+        const res = await fetch(prefix + encodeURIComponent(url));
+        if (res.ok) { clearTimeout(tid); return await res.text(); }
+      } catch { /* try next */ }
+    }
+  } finally {
+    clearTimeout(tid);
+  }
+
+  throw new Error('تمام مسیرهای دریافت ناموفق بودند.');
+}
+
+/* ──── public API ──── */
+
+/**
+ * Fetch plain-text openproxylist feed (existing behaviour).
+ */
+export async function fetchProxyFeed(type, workerUrl) {
+  const feed = PROXY_FEEDS[type];
+  if (!feed) throw new Error('نوع پروکسی نامعتبر است.');
+  const url = plRawUrl(feed.file);
+  const text = await fetchText(url, workerUrl);
+  const list = parseIpPortLines(text);
+  if (!list.length) throw new Error('فهرست پروکسی خالی دریافت شد.');
+  return { list, via: workerUrl ? 'worker' : 'direct' };
+}
+
+/**
+ * Fetch rich EDT-Pages/Proxy-List JSON feed.
+ * Returns enriched entries with country, city, ASN metadata.
+ */
+export async function fetchEdtFeed(type, workerUrl) {
+  const feed = EDT_FEEDS[type];
+  if (!feed) throw new Error('نوع پروکسی EDT نامعتبر است.');
+  const url = `${EDT_RAW_BASE}/${feed.file}`;
+  const text = await fetchText(url, workerUrl);
+  const list = parseEdtJson(text);
+  if (!list.length) throw new Error('فهرست پروکسی EDT خالی دریافت شد.');
+  return { list, via: workerUrl ? 'worker' : 'direct', source: 'EDT-Pages/Proxy-List' };
+}
+
+/**
+ * Real liveness check for a batch of fetched proxies via Worker TCP probe.
+ */
+export async function probeProxyBatch(list, workerUrl, { concurrency = 25, timeoutMs = 20000 } = {}) {
+  if (!workerUrl) throw new Error('برای تست زنده بودن پروکسی‌ها، آدرس Worker را وارد کنید.');
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const byPort = {};
+    list.forEach(p => { (byPort[p.port] = byPort[p.port] || []).push(p.ip); });
+
+    const results = [];
+    for (const port of Object.keys(byPort)) {
+      const res = await fetch(`${workerUrl.replace(/\/$/, '')}/api/scan/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ips: byPort[port], port: Number(port), mode: 'tcp', concurrency }),
+        signal: controller.signal
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.success) {
+        data.results.forEach(r => results.push({ ip: r.ip, port: Number(port), latency: r.latency, status: r.status }));
+      }
+    }
+    clearTimeout(tid);
+    return results;
+  } catch (e) {
+    clearTimeout(tid);
+    throw e;
+  }
+}
+
+================================================================
+FILE: src/assets/main.css
+================================================================
+/* ═══════════════════════════════════════════════════════════════════
+   MiSub & CF-Optimizer — Telegram Glassmorphism Theme
+   Figma-style frosted glass UI inspired by Telegram Web Apps
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Base palette ── */
+  --bg-main: #0a0e1a;
+  --bg-gradient-start: #0d1b2a;
+  --bg-gradient-mid: #0a1628;
+  --bg-gradient-end: #070b14;
+
+  /* ── Glass surfaces ── */
+  --glass-bg: rgba(16, 24, 48, 0.55);
+  --glass-bg-hover: rgba(20, 30, 60, 0.65);
+  --glass-bg-strong: rgba(12, 20, 42, 0.72);
+  --glass-border: rgba(56, 189, 248, 0.12);
+  --glass-border-hover: rgba(56, 189, 248, 0.25);
+  --glass-blur: 20px;
+  --glass-blur-strong: 28px;
+
+  /* ── Card surfaces ── */
+  --bg-card: rgba(14, 22, 46, 0.60);
+  --bg-card-hover: rgba(22, 34, 66, 0.70);
+  --bg-input: rgba(8, 14, 32, 0.65);
+  --border-color: rgba(56, 189, 248, 0.10);
+  --border-focus: rgba(56, 189, 248, 0.50);
+
+  /* ── Text ── */
+  --text-primary: #f0f4ff;
+  --text-secondary: #8da4c7;
+  --text-muted: #5a7094;
+
+  /* ── Accents ── */
+  --accent-cyan: #38bdf8;
+  --accent-blue: #2563eb;
+  --accent-blue-glow: rgba(37, 99, 235, 0.35);
+  --accent-green: #10b981;
+  --accent-green-glow: rgba(16, 185, 129, 0.25);
+  --accent-purple: #8b5cf6;
+  --accent-yellow: #f59e0b;
+  --accent-red: #ef4444;
+  --accent-lime: #a3e635;
+  --accent-teal: #14b8a6;
+  --accent-pink: #ec4899;
+
+  /* ── Telegram-style accent colors ── */
+  --tg-blue: #2AABEE;
+  --tg-blue-dark: #229ED9;
+  --tg-green: #4fae4e;
+  --tg-green-dark: #3e9e3e;
+
+  /* ── Shadows & Glows ── */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-glow-cyan: 0 0 20px rgba(56, 189, 248, 0.15);
+  --shadow-glow-blue: 0 0 20px rgba(37, 99, 235, 0.2);
+  --shadow-glow-green: 0 0 15px rgba(16, 185, 129, 0.15);
+
+  /* ── Radius ── */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  /* ── Transitions ── */
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: linear-gradient(160deg, var(--bg-gradient-start) 0%, var(--bg-gradient-mid) 40%, var(--bg-gradient-end) 100%);
+  background-attachment: fixed;
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Display', Roboto, 'Helvetica Neue', Arial, system-ui, sans-serif;
+  line-height: 1.6;
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Subtle animated background orbs for depth */
+body::before,
+body::after {
+  content: '';
+  position: fixed;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: -1;
+  filter: blur(120px);
+}
+body::before {
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(37, 99, 235, 0.08) 0%, transparent 70%);
+  top: -100px;
+  right: -100px;
+}
+body::after {
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.06) 0%, transparent 70%);
+  bottom: -150px;
+  left: -150px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Typography & Utilities
+   ═══════════════════════════════════════════════════════════════════ */
+.font-mono {
+  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  direction: ltr;
+}
+.text-cyan { color: var(--accent-cyan); }
+.text-green { color: var(--accent-green); }
+.text-yellow { color: var(--accent-yellow); }
+.text-red { color: var(--accent-red); }
+.text-muted { color: var(--text-muted); }
+.text-center { text-align: center; }
+.font-bold { font-weight: 700; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Glass Card System
+   ═══════════════════════════════════════════════════════════════════ */
+.card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transition: border-color 0.3s var(--ease-smooth), box-shadow 0.3s var(--ease-smooth);
+  position: relative;
+  overflow: hidden;
+}
+.card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(56, 189, 248, 0.15) 50%, transparent 100%);
+  pointer-events: none;
+}
+.card:hover {
+  border-color: var(--glass-border-hover);
+  box-shadow: var(--shadow-lg), var(--shadow-glow-cyan);
+}
+
+.card-header {
+  margin-bottom: 16px;
+}
+.card-header h2,
+.card-header h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  letter-spacing: -0.01em;
+}
+.card-header .desc {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  line-height: 1.7;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Buttons — Telegram-style with glass effect
+   ═══════════════════════════════════════════════════════════════════ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.25s var(--ease-smooth);
+  white-space: nowrap;
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.btn.primary {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.75) 0%, rgba(56, 189, 248, 0.55) 100%);
+  color: #fff;
+  border-color: rgba(56, 189, 248, 0.30);
+  box-shadow: 0 2px 12px rgba(37, 99, 235, 0.25);
+}
+.btn.primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.90) 0%, rgba(56, 189, 248, 0.70) 100%);
+  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.40);
+  transform: translateY(-1px);
+}
+
+.btn.secondary {
+  background: rgba(30, 41, 59, 0.60);
+  color: #c8d6e5;
+  border-color: rgba(56, 189, 248, 0.12);
+  backdrop-filter: blur(8px);
+}
+.btn.secondary:hover:not(:disabled) {
+  background: rgba(40, 55, 80, 0.70);
+  border-color: rgba(56, 189, 248, 0.25);
+  color: #fff;
+}
+
+.btn.success {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.75) 0%, rgba(20, 184, 166, 0.55) 100%);
+  color: #fff;
+  border-color: rgba(16, 185, 129, 0.30);
+  box-shadow: 0 2px 12px rgba(16, 185, 129, 0.20);
+}
+.btn.success:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.90) 0%, rgba(20, 184, 166, 0.70) 100%);
+  box-shadow: 0 4px 20px rgba(16, 185, 129, 0.35);
+  transform: translateY(-1px);
+}
+
+.btn.danger {
+  background: linear-gradient(135deg, rgba(220, 38, 38, 0.75) 0%, rgba(239, 68, 68, 0.55) 100%);
+  color: #fff;
+  border-color: rgba(239, 68, 68, 0.30);
+}
+.btn.danger:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(220, 38, 38, 0.90) 0%, rgba(239, 68, 68, 0.70) 100%);
+  transform: translateY(-1px);
+}
+
+.btn.small {
+  padding: 6px 14px;
+  font-size: 0.76rem;
+  border-radius: var(--radius-sm);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Form Fields — Glass Input Style
+   ═══════════════════════════════════════════════════════════════════ */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 14px;
+}
+.form-group label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #b8c9e2;
+  letter-spacing: 0.01em;
+}
+
+.input-box,
+.textarea-box {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid rgba(56, 189, 248, 0.10);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  padding: 10px 14px;
+  font-size: 0.88rem;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: border-color 0.25s var(--ease-smooth), box-shadow 0.25s var(--ease-smooth), background 0.25s var(--ease-smooth);
+}
+.input-box:focus,
+.textarea-box:focus {
+  outline: none;
+  border-color: var(--accent-cyan);
+  background: rgba(8, 14, 32, 0.80);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12), 0 0 16px rgba(56, 189, 248, 0.08);
+}
+.input-box::placeholder,
+.textarea-box::placeholder {
+  color: var(--text-muted);
+}
+
+select.input-box {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%235a7094' viewBox='0 0 16 16'%3E%3Cpath d='M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: left 12px center;
+  padding-left: 32px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Badges — Glass style
+   ═══════════════════════════════════════════════════════════════════ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 0.70rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.badge.vless { background: rgba(99, 102, 241, 0.25); color: #c7d2fe; border: 1px solid rgba(99, 102, 241, 0.30); }
+.badge.vmess { background: rgba(245, 158, 11, 0.20); color: #fde68a; border: 1px solid rgba(245, 158, 11, 0.30); }
+.badge.trojan { background: rgba(16, 185, 129, 0.20); color: #a7f3d0; border: 1px solid rgba(16, 185, 129, 0.30); }
+.badge.ss { background: rgba(168, 85, 247, 0.20); color: #f5d0fe; border: 1px solid rgba(168, 85, 247, 0.30); }
+.badge.hysteria2 { background: rgba(236, 72, 153, 0.20); color: #fbcfe8; border: 1px solid rgba(236, 72, 153, 0.30); }
+.badge.tuic { background: rgba(37, 99, 235, 0.20); color: #bfdbfe; border: 1px solid rgba(37, 99, 235, 0.30); }
+.badge.ok { background: rgba(16, 185, 129, 0.20); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.30); }
+.badge.testing { background: rgba(245, 158, 11, 0.15); color: #fde047; border: 1px solid rgba(245, 158, 11, 0.25); }
+.badge.error { background: rgba(239, 68, 68, 0.15); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.25); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Grid Layouts
+   ═══════════════════════════════════════════════════════════════════ */
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Tables — Glass rows
+   ═══════════════════════════════════════════════════════════════════ */
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.data-table th,
+.data-table td {
+  padding: 10px 14px;
+  text-align: right;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.06);
+}
+.data-table th {
+  background: rgba(16, 24, 48, 0.70);
+  color: #8da4c7;
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+.data-table tr {
+  transition: background 0.2s var(--ease-smooth);
+}
+.data-table tr:hover {
+  background: rgba(56, 189, 248, 0.04);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Spinner — Telegram-style
+   ═══════════════════════════════════════════════════════════════════ */
+.spinner {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(255, 255, 255, 0.30);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Scrollbar — Sleek glass scrollbar
+   ═══════════════════════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.18);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(56, 189, 248, 0.30); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Selection & Focus
+   ═══════════════════════════════════════════════════════════════════ */
+::selection {
+  background: rgba(56, 189, 248, 0.30);
+  color: #fff;
+}
+
+================================================================
+FILE: src/components/layout/Header.vue
+================================================================
+<template>
+  <header class="app-header">
+    <div class="header-container">
+      <div class="brand">
+        <div class="logo-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="url(#bolt-grad)" stroke="rgba(56,189,248,0.5)" stroke-width="0.5"/>
+            <defs><linearGradient id="bolt-grad" x1="3" y1="2" x2="22" y2="22"><stop stop-color="#38bdf8"/><stop offset="1" stop-color="#2563eb"/></linearGradient></defs>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>MiSub & CF-Optimizer</h1>
+          <span class="badge-version">Ultra Edition v3.5</span>
+        </div>
+      </div>
+
+      <!-- Live Status Pill -->
+      <div v-if="appState.isScanning" class="live-status-pill">
+        <span class="pulse-dot"></span>
+        <span>اسکن: {{ appState.scanProgress.current }}/{{ appState.scanProgress.total }}</span>
+      </div>
+
+      <!-- Desktop Nav -->
+      <nav class="desktop-nav">
+        <button 
+          v-for="tab in tabs" 
+          :key="tab.id"
+          :class="['nav-btn', { active: currentTab === tab.id }]"
+          @click="$emit('change-tab', tab.id)"
+        >
+          <span class="nav-icon">{{ tab.icon }}</span>
+          <span class="nav-label">{{ tab.label }}</span>
+        </button>
+      </nav>
+    </div>
+  </header>
+</template>
+
+<script setup>
+import { appState } from '../../stores/appState';
+
+defineProps({
+  currentTab: String,
+  tabs: Array
+});
+defineEmits(['change-tab']);
+</script>
+
+<style scoped>
+.app-header {
+  background: rgba(10, 14, 26, 0.75);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+.header-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.logo-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.30), rgba(56, 189, 248, 0.20));
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.15);
+}
+.brand-text h1 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #38bdf8 0%, #60a5fa 50%, #2563eb 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.02em;
+}
+.badge-version {
+  font-size: 0.65rem;
+  font-weight: 600;
+  background: rgba(56, 189, 248, 0.10);
+  color: rgba(56, 189, 248, 0.70);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(56, 189, 248, 0.12);
+  letter-spacing: 0.03em;
+}
+
+.live-status-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(37, 99, 235, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  color: var(--accent-cyan);
+  font-size: 0.73rem;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: var(--radius-full);
+  backdrop-filter: blur(10px);
+}
+.pulse-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--accent-cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--accent-cyan);
+  animation: pulse 1.2s infinite alternate;
+}
+@keyframes pulse {
+  from { opacity: 0.3; transform: scale(0.8); }
+  to { opacity: 1; transform: scale(1.3); }
+}
+
+.desktop-nav {
+  display: flex;
+  gap: 6px;
+}
+.nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(30, 41, 59, 0.40);
+  color: #8da4c7;
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  font-size: 0.80rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.25s var(--ease-smooth);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.nav-btn:hover {
+  background: rgba(37, 99, 235, 0.15);
+  color: #c8d6e5;
+  border-color: rgba(56, 189, 248, 0.18);
+}
+.nav-btn.active {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.50), rgba(56, 189, 248, 0.30));
+  color: #fff;
+  border-color: rgba(56, 189, 248, 0.35);
+  box-shadow: 0 0 16px rgba(37, 99, 235, 0.20), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+.nav-icon { font-size: 1rem; }
+.nav-label { font-size: 0.78rem; }
+
+@media (max-width: 768px) {
+  .desktop-nav { display: none; }
+  .header-container { padding: 12px 16px; }
+  .brand-text h1 { font-size: 0.95rem; }
+}
+</style>
+
+================================================================
+FILE: src/components/layout/MobileNav.vue
+================================================================
+<template>
+  <nav class="mobile-bottom-nav">
+    <button 
+      v-for="tab in tabs" 
+      :key="tab.id"
+      :class="['bottom-btn', { active: currentTab === tab.id }]"
+      @click="$emit('change-tab', tab.id)"
+    >
+      <span class="btn-icon">{{ tab.icon }}</span>
+      <span class="btn-text">{{ tab.shortLabel || tab.label }}</span>
+    </button>
+  </nav>
+</template>
+
+<script setup>
+defineProps({
+  currentTab: String,
+  tabs: Array
+});
+defineEmits(['change-tab']);
+</script>
+
+<style scoped>
+.mobile-bottom-nav {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 64px;
+  background: rgba(10, 14, 26, 0.85);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border-top: 1px solid rgba(56, 189, 248, 0.08);
+  z-index: 50;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.bottom-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  color: #5a7094;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  cursor: pointer;
+  transition: all 0.25s var(--ease-smooth);
+  position: relative;
+}
+.bottom-btn:active {
+  transform: scale(0.92);
+}
+.btn-icon {
+  font-size: 1.25rem;
+  transition: transform 0.25s var(--ease-bounce);
+}
+.btn-text {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.bottom-btn.active {
+  color: var(--accent-cyan);
+}
+.bottom-btn.active .btn-icon {
+  transform: translateY(-2px) scale(1.1);
+}
+.bottom-btn.active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+  border-radius: 0 0 3px 3px;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+}
+
+@media (max-width: 768px) {
+  .mobile-bottom-nav { display: flex; }
+}
+</style>
+
+================================================================
+FILE: src/components/layout/Footer.vue
+================================================================
+<template>
+  <footer class="app-footer">
+    <div class="footer-glow"></div>
+    <p>سامانه جامع MiSub & CF-Optimizer Ultra | استقرار روی GitHub Pages و Cloudflare Workers</p>
+  </footer>
+</template>
+
+<style scoped>
+.app-footer {
+  text-align: center;
+  padding: 24px 16px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 32px;
+  position: relative;
+}
+.footer-glow {
+  width: 120px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.25), transparent);
+  margin: 0 auto 16px;
+}
+</style>
+
+================================================================
+FILE: src/components/layout/Toast.vue
+================================================================
+<template>
+  <div class="toast-container">
+    <transition-group name="toast-anim">
+      <div 
+        v-for="item in notifications" 
+        :key="item.id"
+        :class="['toast-item', item.type]"
+      >
+        <span class="toast-icon">{{ item.type === 'success' ? '✓' : item.type === 'error' ? '✕' : 'ℹ' }}</span>
+        <span class="toast-msg">{{ item.message }}</span>
+      </div>
+    </transition-group>
+  </div>
+</template>
+
+<script setup>
+defineProps({
+  notifications: Array
+});
+</script>
+
+<style scoped>
+.toast-container {
+  position: fixed;
+  bottom: 80px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+  pointer-events: none;
+}
+.toast-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(14, 22, 46, 0.80);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(56, 189, 248, 0.20);
+  color: #e2e8f0;
+  padding: 10px 18px;
+  border-radius: var(--radius-md);
+  font-size: 0.82rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.toast-item.success {
+  border-color: rgba(16, 185, 129, 0.30);
+  background: rgba(6, 78, 59, 0.50);
+}
+.toast-item.error {
+  border-color: rgba(239, 68, 68, 0.30);
+  background: rgba(127, 29, 29, 0.50);
+}
+.toast-icon {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.toast-item.success .toast-icon { color: #34d399; }
+.toast-item.error .toast-icon { color: #fca5a5; }
+
+.toast-anim-enter-active { animation: slideIn 0.3s var(--ease-bounce); }
+.toast-anim-leave-active { animation: slideOut 0.25s var(--ease-smooth); }
+
+@keyframes slideIn {
+  from { transform: translateX(20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes slideOut {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(20px); opacity: 0; }
+}
+</style>
+
+================================================================
+FILE: src/components/common/Modal.vue
+================================================================
+<template>
+  <teleport to="body">
+    <transition name="modal-fade">
+      <div v-if="isOpen" class="modal-backdrop" @click.self="$emit('close')">
+        <div class="modal-dialog">
+          <div class="modal-header">
+            <h3>{{ title }}</h3>
+            <button @click="$emit('close')" class="close-btn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <slot></slot>
+          </div>
+        </div>
+      </div>
+    </transition>
+  </teleport>
+</template>
+
+<script setup>
+defineProps({
+  isOpen: Boolean,
+  title: String
+});
+defineEmits(['close']);
+</script>
+
+<style scoped>
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 8, 18, 0.80);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 16px;
+}
+.modal-dialog {
+  max-width: 520px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  background: rgba(14, 22, 46, 0.80);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border: 1px solid rgba(56, 189, 248, 0.15);
+  border-radius: var(--radius-xl);
+  padding: 24px;
+  box-shadow: 0 16px 64px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.08);
+  padding-bottom: 14px;
+  margin-bottom: 18px;
+}
+.modal-header h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+.close-btn {
+  background: rgba(30, 41, 59, 0.50);
+  border: 1px solid rgba(56, 189, 248, 0.10);
+  color: #8da4c7;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s var(--ease-smooth);
+}
+.close-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.30);
+  color: #fca5a5;
+}
+
+.modal-fade-enter-active { transition: opacity 0.25s var(--ease-smooth); }
+.modal-fade-leave-active { transition: opacity 0.2s var(--ease-smooth); }
+.modal-fade-enter-from,
+.modal-fade-leave-to { opacity: 0; }
+</style>
+
+================================================================
+FILE: src/components/common/QrCodeModal.vue
+================================================================
+<template>
+  <Modal :is-open="isOpen" :title="'بارکد QR کانفیگ'" @close="$emit('close')">
+    <div class="qr-container">
+      <p class="qr-title">{{ title }}</p>
+      <div class="qr-image-wrap">
+        <img 
+          :src="'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(content)" 
+          alt="QR Code" 
+          class="qr-img" 
+        />
+      </div>
+      <div class="qr-actions">
+        <button @click="copyText" class="btn primary small">کپی لینک کانفیگ</button>
+      </div>
+    </div>
+  </Modal>
+</template>
+
+<script setup>
+import Modal from './Modal.vue';
+
+const props = defineProps({
+  isOpen: Boolean,
+  title: String,
+  content: String
+});
+
+const copyText = async () => {
+  await navigator.clipboard.writeText(props.content || '');
+  alert('کپی شد.');
+};
+</script>
+
+<style scoped>
+.qr-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+}
+.qr-title {
+  font-size: 0.82rem;
+  color: #b8c9e2;
+  word-break: break-all;
+}
+.qr-image-wrap {
+  background: #fff;
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  display: inline-block;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+.qr-img {
+  width: 180px;
+  height: 180px;
+  display: block;
+}
+.qr-actions { display: flex; gap: 8px; }
+</style>
+
+================================================================
+FILE: src/components/optimizer/ProxyInjector.vue
+================================================================
+<template>
+  <div class="proxy-injector card">
+    <label class="toggle-wrap">
+      <input type="checkbox" v-model="enabled" />
+      <span class="toggle-label">📌 تزریق پروکسی برای آی‌پی ثابت (Static IP via Proxy Chain — HTTP/SOCKS4/SOCKS5)</span>
+    </label>
+
+    <div v-if="enabled" class="body">
+      <p class="desc">
+        این قابلیت یک پروکسی HTTP/SOCKS واقعی را جلوی نودها قرار می‌دهد تا خروجی همیشه از یک آی‌پی ثابت عبور کند
+        (با فیلد واقعی <code>dialer-proxy</code> در Clash Meta و <code>detour</code> در Sing-box).
+        ⚠️ فقط روی خروجی <b>Clash Meta</b> و <b>Sing-box</b> اعمال می‌شود.
+      </p>
+
+      <!-- EDT-Pages Rich Feeds -->
+      <div class="feed-section">
+        <div class="feed-section-header">
+          <span class="feed-section-title">🌐 EDT-Pages/Proxy-List (داده غنی با اطلاعات کشور و شهر)</span>
+        </div>
+        <div class="feed-row">
+          <button
+            v-for="(feed, key) in edtFeeds"
+            :key="'edt-' + key"
+            @click="loadEdtFeed(key)"
+            :disabled="loadingFeed === 'edt-' + key"
+            class="btn small secondary feed-btn"
+          >
+            <span v-if="loadingFeed === 'edt-' + key" class="spinner"></span>
+            {{ loadingFeed === 'edt-' + key ? 'در حال دریافت...' : `📥 دریافت ${feed.label} از EDT` }}
+          </button>
+        </div>
+      </div>
+
+      <!-- openproxylist Feeds -->
+      <div class="feed-section">
+        <div class="feed-section-header">
+          <span class="feed-section-title">📋 openproxylist (متن ساده IP:Port)</span>
+        </div>
+        <div class="feed-row">
+          <button
+            v-for="(feed, key) in plFeeds"
+            :key="'pl-' + key"
+            @click="loadPlFeed(key)"
+            :disabled="loadingFeed === 'pl-' + key"
+            class="btn small secondary feed-btn"
+          >
+            <span v-if="loadingFeed === 'pl-' + key" class="spinner"></span>
+            {{ loadingFeed === 'pl-' + key ? 'در حال دریافت...' : `📥 دریافت ${feed.label}` }}
+          </button>
+        </div>
+      </div>
+
+      <p v-if="feedMsg" class="feed-msg" :class="feedOk ? 'text-green' : 'text-red'">{{ feedMsg }}</p>
+
+      <!-- Proxy list with rich metadata -->
+      <div v-if="proxyList.length" class="list-actions">
+        <button @click="testAllLive" :disabled="testingLive || !hasWorker" class="btn small primary">
+          <span v-if="testingLive" class="spinner"></span>
+          {{ testingLive ? 'در حال تست...' : '🧪 تست زنده بودن (TCP)' }}
+        </button>
+        <button @click="clearList" class="btn small secondary">🗑️ پاکسازی لیست</button>
+        <span class="count-badge">{{ proxyList.length }} پروکسی</span>
+      </div>
+      <p v-if="!hasWorker" class="hint text-yellow">برای تست زنده بودن، آدرس Worker را در تنظیمات وارد کنید.</p>
+
+      <!-- Country Filter -->
+      <div v-if="hasRichData && proxyList.length" class="filter-row">
+        <select v-model="countryFilter" class="input-box font-mono small-select">
+          <option value="">همه کشورها</option>
+          <option v-for="c in availableCountries" :key="c.code" :value="c.code">
+            {{ c.emoji }} {{ c.name }} ({{ c.count }})
+          </option>
+        </select>
+        <select v-model="sortBy" class="input-box font-mono small-select">
+          <option value="default">ترتیب پیش‌فرض</option>
+          <option value="latency">کمترین تاخیر</option>
+          <option value="country">کشور</option>
+        </select>
+      </div>
+
+      <!-- Proxy Table -->
+      <div v-if="proxyList.length" class="proxy-table-wrap">
+        <table class="proxy-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>IP</th>
+              <th>Port</th>
+              <th v-if="hasRichData">📍 کشور</th>
+              <th v-if="hasRichData">🏙️ شهر</th>
+              <th v-if="hasRichData">🏢 سازمان</th>
+              <th>وضعیت</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr 
+              v-for="p in displayList" 
+              :key="`${p.ip}:${p.port}`" 
+              @click="selectProxy(p)" 
+              :class="{ active: selected && selected.ip === p.ip && selected.port === p.port }"
+            >
+              <td><input type="radio" :checked="selected && selected.ip === p.ip && selected.port === p.port" readonly /></td>
+              <td class="font-mono ip-cell">{{ p.ip }}</td>
+              <td class="font-mono port-cell">{{ p.port }}</td>
+              <td v-if="hasRichData" class="country-cell">
+                <span v-if="p.countryEmoji" class="country-flag">{{ p.countryEmoji }}</span>
+                <span class="country-code">{{ p.countryCode || '-' }}</span>
+              </td>
+              <td v-if="hasRichData" class="city-cell text-muted">{{ p.city || '-' }}</td>
+              <td v-if="hasRichData" class="org-cell text-muted">{{ p.asOrg ? truncate(p.asOrg, 30) : '-' }}</td>
+              <td>
+                <span v-if="p.status === 'ok'" class="status-ok">✓ {{ p.latency }}ms</span>
+                <span v-else-if="p.status === 'error'" class="status-err">✗ پاسخ‌نداد</span>
+                <span v-else class="status-untested">تست‌نشده</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Manual Entry -->
+      <div class="manual-entry">
+        <label class="manual-label">یا آدرس پروکسی را دستی وارد کنید:</label>
+        <div class="manual-row">
+          <select v-model="manualType" class="input-box font-mono small-select">
+            <option value="http">HTTP</option>
+            <option value="socks5">SOCKS5</option>
+            <option value="socks4">SOCKS4</option>
+          </select>
+          <input v-model="manualIp" placeholder="IP" class="input-box font-mono" />
+          <input v-model="manualPort" placeholder="Port" class="input-box font-mono small-input" />
+          <button @click="applyManual" class="btn small primary">اعمال</button>
+        </div>
+        <div class="manual-row">
+          <input v-model="manualUser" placeholder="یوزرنیم (اختیاری)" class="input-box font-mono" />
+          <input v-model="manualPass" placeholder="پسورد (اختیاری)" class="input-box font-mono" type="password" />
+        </div>
+      </div>
+
+      <!-- Selected Summary -->
+      <div v-if="selected" class="selected-summary">
+        ✅ پروکسی انتخاب‌شده: <span class="font-mono">{{ selectedType }}://{{ selected.ip }}:{{ selected.port }}</span>
+        <span v-if="selected.countryEmoji" class="selected-country"> {{ selected.countryEmoji }} {{ selected.countryEn }}</span>
+        — از این پس در خروجی Clash Meta و Sing-box به‌عنوان دیالر ثابت اعمال می‌شود.
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed } from 'vue';
+import { fetchProxyFeed, fetchEdtFeed, probeProxyBatch, PROXY_FEEDS, EDT_FEEDS } from '../../utils/optimizer/proxySource';
+import { getWorkerUrl } from '../../utils/workerApi';
+
+const emit = defineEmits(['update:frontProxy']);
+
+const enabled = ref(false);
+const plFeeds = PROXY_FEEDS;
+const edtFeeds = EDT_FEEDS;
+const loadingFeed = ref(null);
+const feedMsg = ref('');
+const feedOk = ref(true);
+const proxyList = ref([]);
+const testingLive = ref(false);
+const selected = ref(null);
+const selectedType = ref('socks5');
+const countryFilter = ref('');
+const sortBy = ref('default');
+
+const manualType = ref('socks5');
+const manualIp = ref('');
+const manualPort = ref('');
+const manualUser = ref('');
+const manualPass = ref('');
+
+const hasWorker = computed(() => !!getWorkerUrl());
+
+const hasRichData = computed(() => proxyList.value.some(p => p.countryCode || p.asOrg));
+
+const availableCountries = computed(() => {
+  const map = {};
+  proxyList.value.forEach(p => {
+    if (p.countryCode) {
+      if (!map[p.countryCode]) {
+        map[p.countryCode] = { code: p.countryCode, emoji: p.countryEmoji || '', name: p.countryEn || p.countryCode, count: 0 };
+      }
+      map[p.countryCode].count++;
+    }
+  });
+  return Object.values(map).sort((a, b) => b.count - a.count);
+});
+
+const filteredList = computed(() => {
+  let list = proxyList.value;
+  if (countryFilter.value) {
+    list = list.filter(p => p.countryCode === countryFilter.value);
+  }
+  if (sortBy.value === 'latency') {
+    list = [...list].sort((a, b) => {
+      if (a.status === 'ok' && b.status !== 'ok') return -1;
+      if (b.status === 'ok' && a.status !== 'ok') return 1;
+      return (a.latency || 9999) - (b.latency || 9999);
+    });
+  } else if (sortBy.value === 'country') {
+    list = [...list].sort((a, b) => (a.countryCode || 'zz').localeCompare(b.countryCode || 'zz'));
+  }
+  return list;
+});
+
+const displayList = computed(() => filteredList.value.slice(0, 80));
+
+function truncate(str, len) {
+  return str.length > len ? str.slice(0, len) + '…' : str;
+}
+
+async function loadEdtFeed(type) {
+  loadingFeed.value = 'edt-' + type;
+  feedMsg.value = '';
+  try {
+    const worker = getWorkerUrl();
+    const { list, source } = await fetchEdtFeed(type, worker);
+    proxyList.value = list.map(p => ({ ...p, status: 'untested', latency: null }));
+    selectedType.value = type === 'https' ? 'http' : type;
+    feedOk.value = true;
+    feedMsg.value = `✅ ${list.length} پروکسی ${EDT_FEEDS[type].label} از ${source} دریافت شد — با اطلاعات کشور، شهر و ASN`;
+  } catch (e) {
+    feedOk.value = false;
+    feedMsg.value = `❌ ${e.message}`;
+  } finally {
+    loadingFeed.value = null;
+  }
+}
+
+async function loadPlFeed(type) {
+  loadingFeed.value = 'pl-' + type;
+  feedMsg.value = '';
+  try {
+    const worker = getWorkerUrl();
+    const { list } = await fetchProxyFeed(type, worker);
+    proxyList.value = list.map(p => ({ ...p, status: 'untested', latency: null }));
+    selectedType.value = type;
+    feedOk.value = true;
+    feedMsg.value = `✅ ${list.length} پروکسی ${PROXY_FEEDS[type].label} از openproxylist دریافت شد`;
+  } catch (e) {
+    feedOk.value = false;
+    feedMsg.value = `❌ ${e.message}`;
+  } finally {
+    loadingFeed.value = null;
+  }
+}
+
+async function testAllLive() {
+  if (!proxyList.value.length) return;
+  testingLive.value = true;
+  try {
+    const worker = getWorkerUrl();
+    const batch = proxyList.value.slice(0, 200);
+    const results = await probeProxyBatch(batch, worker, { concurrency: 25 });
+    const byKey = {};
+    results.forEach(r => { byKey[`${r.ip}:${r.port}`] = r; });
+    proxyList.value = proxyList.value.map(p => {
+      const r = byKey[`${p.ip}:${p.port}`];
+      return r ? { ...p, status: r.status, latency: r.latency } : p;
+    }).sort((a, b) => {
+      if (a.status === 'ok' && b.status !== 'ok') return -1;
+      if (b.status === 'ok' && a.status !== 'ok') return 1;
+      if (a.status === 'ok' && b.status === 'ok') return (a.latency || 9999) - (b.latency || 9999);
+      return 0;
+    });
+  } catch (e) {
+    feedOk.value = false;
+    feedMsg.value = `❌ ${e.message}`;
+  } finally {
+    testingLive.value = false;
+  }
+}
+
+function selectProxy(p) {
+  selected.value = { ip: p.ip, port: p.port, countryEmoji: p.countryEmoji, countryEn: p.countryEn };
+  emitFrontProxy();
+}
+
+function applyManual() {
+  if (!manualIp.value.trim() || !manualPort.value) return;
+  selectedType.value = manualType.value;
+  selected.value = { ip: manualIp.value.trim(), port: Number(manualPort.value) };
+  emitFrontProxy();
+}
+
+function clearList() {
+  proxyList.value = [];
+  selected.value = null;
+  countryFilter.value = '';
+  feedMsg.value = '';
+}
+
+function emitFrontProxy() {
+  if (!selected.value) { emit('update:frontProxy', null); return; }
+  const clashType = selectedType.value === 'socks5' || selectedType.value === 'socks4' ? 'socks5' : 'http';
+  const sbType = selectedType.value === 'http' ? 'http' : 'socks';
+  emit('update:frontProxy', {
+    name: `FrontProxy-${selected.value.ip}`,
+    type: clashType,
+    tag: `front-proxy-${selected.value.ip}`,
+    sbType,
+    socksVersion: selectedType.value === 'socks4' ? '4' : '5',
+    server: selected.value.ip,
+    port: selected.value.port,
+    username: manualUser.value.trim() || undefined,
+    password: manualPass.value.trim() || undefined
+  });
+}
+</script>
+
+<style scoped>
+.proxy-injector {
+  padding: 18px;
+}
+.toggle-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.toggle-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+.body {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.desc {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.8;
+}
+.desc code { color: var(--accent-lime); }
+.desc b { color: var(--text-primary); }
+
+.feed-section {
+  background: rgba(8, 14, 32, 0.40);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+.feed-section-header {
+  margin-bottom: 8px;
+}
+.feed-section-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.feed-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.feed-btn {
+  flex-wrap: nowrap;
+}
+.feed-msg { font-size: 0.76rem; }
+.list-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.count-badge {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  background: rgba(56, 189, 248, 0.08);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(56, 189, 248, 0.10);
+}
+.hint { font-size: 0.74rem; }
+
+.filter-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.small-select {
+  max-width: 180px;
+}
+
+.proxy-table-wrap {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+}
+.proxy-table {
+  width: 100%;
+  font-size: 0.76rem;
+  border-collapse: collapse;
+}
+.proxy-table th {
+  position: sticky;
+  top: 0;
+  background: rgba(14, 22, 46, 0.90);
+  backdrop-filter: blur(12px);
+  padding: 8px 10px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 0.72rem;
+  z-index: 2;
+}
+.proxy-table td {
+  padding: 8px 10px;
+  border-top: 1px solid rgba(56, 189, 248, 0.05);
+}
+.proxy-table tr {
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.proxy-table tr:hover {
+  background: rgba(56, 189, 248, 0.04);
+}
+.proxy-table tr.active {
+  background: rgba(37, 99, 235, 0.12);
+}
+.ip-cell { color: var(--accent-cyan); font-weight: 600; }
+.port-cell { color: var(--text-primary); }
+.country-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.country-flag { font-size: 1rem; }
+.country-code { font-size: 0.74rem; font-weight: 600; color: var(--text-primary); }
+.city-cell { font-size: 0.74rem; }
+.org-cell { font-size: 0.72rem; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-ok { color: var(--accent-green); font-weight: 700; font-size: 0.74rem; }
+.status-err { color: var(--accent-red); font-size: 0.74rem; }
+.status-untested { color: var(--text-muted); font-size: 0.74rem; }
+
+.manual-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(8, 14, 32, 0.35);
+  border: 1px solid rgba(56, 189, 248, 0.06);
+  border-radius: var(--radius-md);
+}
+.manual-label { font-size: 0.80rem; color: var(--text-secondary); font-weight: 600; }
+.manual-row { display: flex; gap: 6px; }
+.small-select { max-width: 100px; }
+.small-input { max-width: 90px; }
+
+.selected-summary {
+  font-size: 0.78rem;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.20);
+  color: #34d399;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  line-height: 1.7;
+}
+.selected-country { font-weight: 600; margin: 0 4px; }
+</style>
+
+================================================================
+FILE: src/components/optimizer/QuickOptimizer.vue
+================================================================
+<template>
+  <div class="optimizer-suite">
+    <div class="hero-header">
+      <div class="hero-glow"></div>
+      <h3 class="hero-title">⚡ بهینه‌ساز جامع کانکشن کلودفلر</h3>
+      <p class="hero-sub">CF-Optimizer Master Hub — تزریق دسته‌ای آی‌پی و پورت تمیز، پکت‌های فرگمنت ضد DPI، تست پینگ زنده و صدور خروجی چندگانه</p>
+    </div>
+
+    <!-- Operator Clean IP Matrix -->
+    <CleanIpMatrix 
+      :presets="operatorPresets" 
+      @select-ip="handleMatrixSelect" 
+    />
+
+    <!-- Main Configuration Panel -->
+    <div class="card config-card">
+      <div class="grid-3">
+        <div class="form-group">
+          <label>🎯 آی‌پی یا دامنه تمیز هدف (Clean IP / Domain):</label>
+          <input 
+            v-model="cleanIp" 
+            placeholder="مثلاً: 104.16.1.1 یا cf.domain.com" 
+            class="input-box font-mono" 
+          />
+        </div>
+
+        <div class="form-group">
+          <label>🔌 پورت اتصال کلودفلر (Port):</label>
+          <select v-model="cleanPort" class="input-box font-mono">
+            <option value="">پیش‌فرض کانفیگ</option>
+            <optgroup label="پورت‌های TLS / HTTPS">
+              <option value="443">443 (استاندارد)</option>
+              <option value="8443">8443</option>
+              <option value="2053">2053</option>
+              <option value="2083">2083</option>
+              <option value="2087">2087</option>
+              <option value="2096">2096</option>
+            </optgroup>
+            <optgroup label="پورت‌های Non-TLS / HTTP">
+              <option value="80">80 (استاندارد)</option>
+              <option value="8080">8080</option>
+              <option value="8880">8880</option>
+              <option value="2052">2052</option>
+              <option value="2082">2082</option>
+              <option value="2086">2086</option>
+              <option value="2095">2095</option>
+            </optgroup>
+          </select>
+          <button
+            @click="handleFindBestPort"
+            :disabled="!cleanIp.trim() || testingPorts"
+            class="btn small secondary port-test-btn"
+          >
+            <span v-if="testingPorts" class="spinner"></span>
+            {{ testingPorts ? 'تست واقعی پورت‌ها...' : '🎯 یافتن سریع‌ترین پورت واقعی' }}
+          </button>
+          <p v-if="portTestMsg" class="port-test-msg" :class="portTestOk ? 'text-green' : 'text-red'">{{ portTestMsg }}</p>
+        </div>
+
+        <div class="form-group">
+          <label>🏷️ SNI / Host سفارشی (اختیاری):</label>
+          <input 
+            v-model="customSni" 
+            placeholder="مثلاً: speed.cloudflare.com" 
+            class="input-box font-mono" 
+          />
+        </div>
+      </div>
+
+      <!-- Fragment Lab -->
+      <div class="fragment-wrapper">
+        <label class="toggle-wrap">
+          <input type="checkbox" v-model="fragmentEnabled" />
+          <span>🧪 فعال‌سازی آزمایشگاه فرگمنت واقعی (FinalMask JSON — سازگار با v2rayNG/PattNG)</span>
+        </label>
+        <FragmentLab v-if="fragmentEnabled" v-model:fm="fmValue" />
+      </div>
+
+      <!-- Aras Mode & Advanced -->
+      <div class="ara-controls">
+        <label class="toggle-wrap aras">
+          <input type="checkbox" v-model="arasMode" />
+          <span>⚡ حالت Aras (پروفایل سبک برای اینستاگرام و سرویس‌های حساس به تاخیر)</span>
+        </label>
+
+        <button @click="advOpen = !advOpen" class="btn small secondary adv-toggle-btn">
+          {{ advOpen ? '▲ بستن تنظیمات پیشرفته' : '▼ تنظیمات پیشرفته (Fingerprint / Cipher Suites)' }}
+        </button>
+        <div v-if="advOpen" class="adv-panel" :class="{ disabled: arasMode }">
+          <div class="form-group">
+            <label>اثر انگشت TLS (Fingerprint):</label>
+            <select v-model="fpValue" :disabled="arasMode" class="input-box font-mono">
+              <option value="unsafe">unsafe (پیش‌فرض)</option>
+              <option value="chrome">chrome</option>
+              <option value="firefox">firefox</option>
+              <option value="safari">safari</option>
+              <option value="edge">edge</option>
+              <option value="random">random</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>مجموعه رمزنگاری سفارشی (Cipher Suites):</label>
+            <textarea v-model="csValue" :disabled="arasMode" rows="2" class="textarea-box font-mono" placeholder="خالی = مقدار پیش‌فرض"></textarea>
+          </div>
+        </div>
+        <p v-if="arasMode" class="aras-hint text-yellow">⚡ حالت Aras فعال: fp=chrome و مجموعه رمزنگاری سبک</p>
+      </div>
+
+      <!-- Proxy Injector -->
+      <ProxyInjector @update:front-proxy="frontProxy = $event" />
+
+      <!-- Subscription URL -->
+      <div class="form-group">
+        <label>🔗 لینک سابسکریپشن مستقیم:</label>
+        <div class="sub-url-row">
+          <input v-model="subUrlInput" placeholder="https://example.com/sub/xxxx" class="input-box font-mono" />
+          <button @click="handleFetchSub" :disabled="!subUrlInput.trim() || fetchingSub" class="btn small primary">
+            <span v-if="fetchingSub" class="spinner"></span>
+            {{ fetchingSub ? 'در حال دریافت...' : '📥 دریافت' }}
+          </button>
+        </div>
+        <p v-if="fetchSubMsg" class="port-test-msg" :class="fetchSubOk ? 'text-green' : 'text-red'">{{ fetchSubMsg }}</p>
+      </div>
+
+      <!-- Prefix -->
+      <div class="form-group">
+        <label>📝 پیشوند نام کانفیگ‌ها:</label>
+        <input v-model="prefix" placeholder="[CF-Clean]" class="input-box" />
+      </div>
+
+      <!-- Input Textarea -->
+      <div class="form-group">
+        <label>📋 کانفیگ‌های ورودی (VLESS / VMess / Trojan / SS / Hysteria2 / TUIC / Clash / Singbox):</label>
+        <textarea 
+          v-model="inputNodes" 
+          rows="5" 
+          class="textarea-box font-mono" 
+          placeholder="کانفیگ‌ها یا لینک سابسکریپشن را اینجا وارد کنید..."
+        ></textarea>
+      </div>
+
+      <div class="btn-action-row">
+        <button @click="executeOptimization" :disabled="!inputNodes.trim()" class="btn success">
+          ⚡ اعمال بهینه‌سازی و بازتولید
+        </button>
+        <button @click="testAllOptimizedPings" :disabled="!optimizedNodes.length || testingPings" class="btn primary">
+          <span v-if="testingPings" class="spinner"></span>
+          {{ testingPings ? 'تست پینگ...' : '📡 تست پینگ زنده' }}
+        </button>
+        <button @click="clearAll" class="btn secondary">پاکسازی</button>
+      </div>
+    </div>
+
+    <!-- Output Section -->
+    <div v-if="optimizedNodes.length" class="output-card card">
+      <div class="output-top">
+        <h4 class="output-title">🎉 نتایج بهینه‌شده ({{ optimizedNodes.length }} نود آماده)</h4>
+        <div class="output-btns">
+          <button @click="copyRaw" class="btn small primary">کپی متن خام</button>
+          <button @click="copyBase64" class="btn small secondary">کپی Base64</button>
+          <button @click="copyJson" class="btn small secondary">JSON</button>
+          <button @click="exportClashYaml" class="btn small secondary">Clash Meta</button>
+          <button @click="exportSingboxJson" class="btn small secondary">Sing-box</button>
+          <button @click="generateWorkerSubLink" class="btn small success">🔗 لینک ساب Worker</button>
+        </div>
+      </div>
+
+      <p v-if="lastErrors.length" class="parse-errors text-red">
+        ⚠️ {{ lastErrors.length }} خط بهینه‌سازی نشد
+      </p>
+
+      <textarea 
+        :value="currentOutputDisplay" 
+        rows="6" 
+        readonly 
+        class="textarea-box font-mono output-area"
+      ></textarea>
+
+      <!-- Node Preview Cards -->
+      <div class="nodes-list-preview">
+        <div 
+          v-for="(uri, idx) in optimizedNodes.slice(0, 15)" 
+          :key="idx" 
+          class="node-card-item"
+        >
+          <div class="node-info font-mono">
+            <span class="idx">#{{ idx + 1 }}</span>
+            <span class="uri-text" :title="uri">{{ uri }}</span>
+          </div>
+          <div class="node-meta-row">
+            <span v-if="pingResults[uri] !== undefined" :class="['ping-badge', getPingClass(pingResults[uri])]">
+              {{ pingResults[uri] !== null ? pingResults[uri] + ' ms' : 'Timeout' }}
+            </span>
+            <button @click="testSinglePing(uri)" class="btn small secondary">تست</button>
+            <button @click="handleOpenQr(uri)" class="btn small secondary">QR</button>
+            <button @click="handleCopySingle(uri)" class="btn small primary">کپی</button>
+          </div>
+        </div>
+        <p v-if="optimizedNodes.length > 15" class="more-hint text-muted">
+          و {{ optimizedNodes.length - 15 }} نود دیگر...
+        </p>
+      </div>
+    </div>
+
+    <!-- QR Code Modal -->
+    <QrCodeModal 
+      :is-open="qrOpen" 
+      :title="qrTitle" 
+      :content="qrContent" 
+      @close="qrOpen = false" 
+    />
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, watch, onMounted } from 'vue';
+import { useOptimizer } from '../../composables/useOptimizer';
+import { parseMultipleNodes, parseNode } from '../../utils/protocols';
+import { toClashMeta } from '../../utils/converters/clash';
+import { toSingbox } from '../../utils/converters/singbox';
+import { pingNodeHost } from '../../utils/scanner/scannerEngine';
+import { findBestCloudflarePort } from '../../utils/optimizer/optimizerEngine';
+import { fetchSubscriptionSmart } from '../../utils/optimizer/araEngine';
+import { getWorkerUrl } from '../../utils/workerApi';
+import CleanIpMatrix from './CleanIpMatrix.vue';
+import FragmentLab from './FragmentLab.vue';
+import ProxyInjector from './ProxyInjector.vue';
+import QrCodeModal from '../common/QrCodeModal.vue';
+
+const props = defineProps({
+  initialCleanIp: String,
+  initialNodes: String
+});
+
+const {
+  cleanIp,
+  cleanPort,
+  customSni,
+  prefix,
+  inputNodes,
+  optimizedNodes,
+  fragmentEnabled,
+  fpValue,
+  csValue,
+  fmValue,
+  arasMode,
+  optimizedRaw,
+  optimizedBase64,
+  lastErrors,
+  optimizeAll
+} = useOptimizer();
+
+const fragmentConfig = ref({ length: '10-50', interval: '10-20', packets: 'tlshello' });
+const operatorPresets = ref({});
+const activeFormat = ref('raw');
+const customFormattedText = ref('');
+const pingResults = ref({});
+const testingPings = ref(false);
+const testingPorts = ref(false);
+const portTestMsg = ref('');
+const portTestOk = ref(true);
+const advOpen = ref(false);
+const subUrlInput = ref('');
+const fetchingSub = ref(false);
+const fetchSubMsg = ref('');
+const fetchSubOk = ref(true);
+const frontProxy = ref(null);
+
+const qrOpen = ref(false);
+const qrTitle = ref('');
+const qrContent = ref('');
+
+onMounted(async () => {
+  try {
+    const res = await fetch('./data/operator-presets.json');
+    operatorPresets.value = await res.json();
+  } catch {}
+});
+
+watch(() => props.initialCleanIp, (val) => { if (val) cleanIp.value = val; });
+watch(() => props.initialNodes, (val) => { if (val) inputNodes.value = val; });
+
+const handleMatrixSelect = (ip, key) => {
+  cleanIp.value = ip;
+  prefix.value = `[${operatorPresets.value[key]?.name.split(' ')[0] || 'CF'}]`;
+};
+
+const executeOptimization = () => {
+  activeFormat.value = 'raw';
+  customFormattedText.value = '';
+  optimizeAll();
+};
+
+const currentOutputDisplay = computed(() => {
+  if (activeFormat.value === 'custom') return customFormattedText.value;
+  return optimizedRaw.value;
+});
+
+const testSinglePing = async (uri) => {
+  const node = parseNode(uri);
+  if (!node) return;
+  pingResults.value[uri] = null;
+  const res = await pingNodeHost(node);
+  pingResults.value[uri] = res.latency;
+};
+
+const testAllOptimizedPings = async () => {
+  testingPings.value = true;
+  for (const uri of optimizedNodes.value.slice(0, 20)) {
+    await testSinglePing(uri);
+  }
+  testingPings.value = false;
+};
+
+const copyRaw = async () => {
+  activeFormat.value = 'raw';
+  await navigator.clipboard.writeText(optimizedRaw.value);
+  alert('کانفیگ‌ها کپی شدند!');
+};
+
+const copyBase64 = async () => {
+  activeFormat.value = 'custom';
+  customFormattedText.value = optimizedBase64.value;
+  await navigator.clipboard.writeText(optimizedBase64.value);
+  alert('سابسکریپشن Base64 کپی شد!');
+};
+
+const copyJson = async () => {
+  activeFormat.value = 'custom';
+  const json = JSON.stringify(optimizedNodes.value, null, 2);
+  customFormattedText.value = json;
+  await navigator.clipboard.writeText(json);
+  alert('خروجی JSON کپی شد!');
+};
+
+const handleFetchSub = async () => {
+  if (!subUrlInput.value.trim()) return;
+  fetchingSub.value = true;
+  fetchSubMsg.value = '';
+  try {
+    const worker = getWorkerUrl();
+    const { lines, via } = await fetchSubscriptionSmart(subUrlInput.value.trim(), worker);
+    inputNodes.value = (inputNodes.value.trim() ? inputNodes.value.trim() + '\n' : '') + lines.join('\n');
+    fetchSubOk.value = true;
+    const viaLabel = via === 'worker' ? 'Worker شما' : via === 'direct' ? 'مستقیم' : via;
+    fetchSubMsg.value = `✅ ${lines.length} کانفیگ دریافت شد (${viaLabel})`;
+  } catch (e) {
+    fetchSubOk.value = false;
+    fetchSubMsg.value = `❌ ${e.message}`;
+  } finally {
+    fetchingSub.value = false;
+  }
+};
+
+const exportClashYaml = async () => {
+  activeFormat.value = 'custom';
+  const nodes = parseMultipleNodes(optimizedRaw.value);
+  const clashFrontProxy = frontProxy.value ? {
+    name: frontProxy.value.name,
+    type: frontProxy.value.type,
+    server: frontProxy.value.server,
+    port: frontProxy.value.port,
+    username: frontProxy.value.username,
+    password: frontProxy.value.password
+  } : null;
+  const yaml = toClashMeta(nodes, 'PROXIES', clashFrontProxy);
+  customFormattedText.value = yaml;
+  await navigator.clipboard.writeText(yaml);
+  alert(clashFrontProxy ? 'Clash Meta با زنجیره پروکسی کپی شد!' : 'Clash Meta (YAML) کپی شد!');
+};
+
+const exportSingboxJson = async () => {
+  activeFormat.value = 'custom';
+  const nodes = parseMultipleNodes(optimizedRaw.value);
+  const sbFrontProxy = frontProxy.value ? {
+    tag: frontProxy.value.tag,
+    type: frontProxy.value.sbType,
+    server: frontProxy.value.server,
+    port: frontProxy.value.port,
+    username: frontProxy.value.username,
+    password: frontProxy.value.password,
+    socksVersion: frontProxy.value.socksVersion
+  } : null;
+  const json = toSingbox(nodes, sbFrontProxy);
+  customFormattedText.value = json;
+  await navigator.clipboard.writeText(json);
+  alert(sbFrontProxy ? 'Sing-box با زنجیره پروکسی کپی شد!' : 'Sing-box (JSON) کپی شد!');
+};
+
+const handleCopySingle = async (uri) => {
+  await navigator.clipboard.writeText(uri);
+  alert('کانفیگ کپی شد!');
+};
+
+const handleOpenQr = (uri) => {
+  qrTitle.value = 'بارکد QR اتصال بهینه‌شده';
+  qrContent.value = uri;
+  qrOpen.value = true;
+};
+
+const generateWorkerSubLink = () => {
+  const worker = localStorage.getItem('cf_hub_worker_url') || '';
+  if (!worker) {
+    alert('ابتدا آدرس Worker را در تب تنظیمات وارد کنید.');
+    return;
+  }
+  const subLink = `${worker}/sub?ip=${encodeURIComponent(cleanIp.value)}&port=${cleanPort.value}&sni=${encodeURIComponent(customSni.value)}`;
+  navigator.clipboard.writeText(subLink);
+  alert('لینک سابسکریپشن کپی شد:\n' + subLink);
+};
+
+const handleFindBestPort = async () => {
+  if (!cleanIp.value.trim()) return;
+  testingPorts.value = true;
+  portTestMsg.value = '';
+  try {
+    const tls = !cleanPort.value || ['443', '8443', '2053', '2083', '2087', '2096'].includes(String(cleanPort.value));
+    const data = await findBestCloudflarePort(cleanIp.value.trim(), { tls });
+    if (data.best) {
+      cleanPort.value = String(data.best.port);
+      portTestOk.value = true;
+      portTestMsg.value = `✅ سریع‌ترین پورت: ${data.best.port} (${data.best.latency} ms)`;
+    } else {
+      portTestOk.value = false;
+      portTestMsg.value = '❌ هیچ پورتی پاسخ نداد.';
+    }
+  } catch (e) {
+    portTestOk.value = false;
+    portTestMsg.value = `❌ ${e.message}`;
+  } finally {
+    testingPorts.value = false;
+  }
+};
+
+const getPingClass = (lat) => {
+  if (lat === null) return 'text-red font-bold';
+  if (lat < 140) return 'text-green font-bold';
+  if (lat < 250) return 'text-yellow';
+  return 'text-red';
+};
+
+const clearAll = () => {
+  inputNodes.value = '';
+  optimizedNodes.value = [];
+  customFormattedText.value = '';
+  pingResults.value = {};
+};
+</script>
+
+<style scoped>
+.optimizer-suite {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.hero-header {
+  text-align: center;
+  padding: 24px 20px;
+  position: relative;
+}
+.hero-glow {
+  width: 100px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+  margin: 0 auto 16px;
+}
+.hero-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #38bdf8, #60a5fa, #2563eb);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero-sub {
+  font-size: 0.80rem;
+  color: var(--text-secondary);
+  margin-top: 6px;
+}
+
+.config-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.port-test-btn {
+  margin-top: 6px;
+  width: 100%;
+}
+.port-test-msg {
+  font-size: 0.76rem;
+  margin-top: 4px;
+}
+
+.ara-controls {
+  background: rgba(8, 14, 32, 0.40);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.toggle-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.toggle-wrap.aras { color: var(--accent-green); }
+.adv-toggle-btn { width: 100%; margin-top: 4px; }
+.adv-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.adv-panel.disabled { opacity: 0.45; pointer-events: none; }
+.aras-hint { font-size: 0.76rem; margin-top: 6px; }
+
+.fragment-wrapper { margin-bottom: 12px; }
+
+.sub-url-row { display: flex; gap: 8px; }
+.sub-url-row input { flex: 1; }
+
+.btn-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.output-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-color: rgba(16, 185, 129, 0.20) !important;
+}
+.output-card::before {
+  background: linear-gradient(90deg, transparent 0%, rgba(16, 185, 129, 0.20) 50%, transparent 100%) !important;
+}
+.output-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.output-title {
+  color: var(--accent-green);
+  font-size: 1rem;
+}
+.output-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.output-area {
+  border-color: rgba(16, 185, 129, 0.20) !important;
+}
+
+.parse-errors { font-size: 0.78rem; }
+
+.nodes-list-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.node-card-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: rgba(8, 14, 32, 0.50);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: var(--radius-md);
+  transition: border-color 0.2s;
+}
+.node-card-item:hover {
+  border-color: rgba(56, 189, 248, 0.18);
+}
+.node-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  font-size: 0.76rem;
+}
+.idx { color: var(--accent-cyan); font-weight: 700; }
+.uri-text {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.node-meta-row {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid rgba(56, 189, 248, 0.06);
+  padding-top: 6px;
+}
+.ping-badge { font-size: 0.74rem; font-family: monospace; direction: ltr; }
+.more-hint { font-size: 0.78rem; text-align: center; }
+</style>
+
+================================================================
+FILE: src/components/optimizer/CleanIpMatrix.vue
+================================================================
+<template>
+  <div class="matrix-card card" v-if="presets && Object.keys(presets).length">
+    <div class="matrix-header">
+      <h4>🌐 ماتریس آی‌پی‌های تمیز اپراتورها</h4>
+      <span class="desc">انتخاب سریع آی‌پی متناسب با اینترنت فعلی شما</span>
+    </div>
+
+    <div class="matrix-grid">
+      <div 
+        v-for="(data, key) in presets" 
+        :key="key" 
+        class="matrix-item"
+        @click="data?.ips?.length && $emit('select-ip', data.ips[0], key)"
+      >
+        <span class="operator-title">{{ data?.name || key }}</span>
+        <span class="ip-preview font-mono">{{ data?.ips?.[0] || '---' }}</span>
+        <span class="count-badge">{{ (data?.ips?.length || 0) }} آی‌پی ذخیره</span>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+defineProps({
+  presets: {
+    type: Object,
+    default: () => ({})
+  }
+});
+defineEmits(['select-ip']);
+</script>
+
+<style scoped>
+.matrix-card {
+  padding: 16px;
+}
+.matrix-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.matrix-header h4 { font-size: 0.9rem; color: var(--accent-cyan); }
+.desc { font-size: 0.74rem; color: var(--text-muted); }
+.matrix-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+.matrix-item {
+  background: rgba(8, 14, 32, 0.50);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  transition: all 0.25s var(--ease-smooth);
+}
+.matrix-item:hover {
+  border-color: rgba(56, 189, 248, 0.30);
+  background: rgba(37, 99, 235, 0.10);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.08);
+  transform: translateY(-1px);
+}
+.operator-title { font-size: 0.78rem; font-weight: 700; color: var(--text-primary); }
+.ip-preview { font-size: 0.74rem; color: var(--accent-cyan); }
+.count-badge { font-size: 0.66rem; color: var(--text-muted); }
+</style>
+
+================================================================
+FILE: src/components/optimizer/FragmentLab.vue
+================================================================
+<template>
+  <div class="fragment-lab">
+    <div class="lab-header">
+      <h4>🧪 آزمایشگاه FinalMask واقعی</h4>
+      <p class="desc">JSON واقعی FinalMask برای کلاینت‌های v2rayNG/PattNG — <code>fm</code></p>
+    </div>
+
+    <div class="preset-row">
+      <button
+        v-for="preset in presets"
+        :key="preset.key"
+        @click="applyPreset(preset.key)"
+        class="btn small"
+        :class="activePreset === preset.key ? 'primary' : 'secondary'"
+      >
+        {{ preset.label }}
+      </button>
+    </div>
+
+    <div class="form-group">
+      <label>JSON خام FinalMask:</label>
+      <textarea
+        :value="fm"
+        @input="handleInput($event.target.value)"
+        rows="4"
+        class="textarea-box font-mono fm-editor"
+        spellcheck="false"
+      ></textarea>
+      <p class="validity" :class="isValid ? 'text-green' : 'text-red'">
+        {{ isValid ? '✓ JSON معتبر' : '✗ JSON نامعتبر' }}
+      </p>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed } from 'vue';
+import { FM_STR, ARAS_FM } from '../../utils/optimizer/araEngine';
+
+const props = defineProps({
+  fm: { type: String, default: '' }
+});
+const emit = defineEmits(['update:fm']);
+
+const presets = [
+  { key: 'default', label: 'پیش‌فرض (دو مرحله‌ای)', value: FM_STR },
+  { key: 'aras', label: 'Aras (سبک)', value: ARAS_FM },
+  {
+    key: 'aggressive',
+    label: 'تهاجمی',
+    value: '{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","lengths":["1-1"],"delays":["0"],"maxSplit":"0"}},{"type":"fragment","settings":{"packets":"1-3","lengths":["1-1"],"delays":["1"],"maxSplit":"500"}}]}'
+  }
+];
+
+const activePreset = ref('default');
+
+const isValid = computed(() => {
+  const v = (props.fm || '').trim();
+  if (!v) return true;
+  try { JSON.parse(v); return true; } catch { return false; }
+});
+
+function applyPreset(key) {
+  const preset = presets.find(p => p.key === key);
+  if (!preset) return;
+  activePreset.value = key;
+  emit('update:fm', preset.value);
+}
+
+function handleInput(val) {
+  activePreset.value = 'custom';
+  emit('update:fm', val);
+}
+</script>
+
+<style scoped>
+.fragment-lab {
+  background: rgba(8, 14, 32, 0.45);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin-top: 8px;
+}
+.lab-header { margin-bottom: 10px; }
+.lab-header h4 { color: var(--accent-cyan); font-size: 0.90rem; }
+.desc { font-size: 0.76rem; color: var(--text-secondary); margin-top: 2px; }
+.desc code { color: var(--accent-lime); }
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.fm-editor { font-size: 0.72rem; direction: ltr; text-align: left; }
+.validity { font-size: 0.74rem; margin-top: 4px; }
+</style>
+
+================================================================
+FILE: src/components/optimizer/NodeConfigCard.vue
+================================================================
+<template>
+  <div class="node-card">
+    <div class="node-top">
+      <span class="node-idx font-mono">#{{ index + 1 }}</span>
+      <span class="node-uri font-mono" :title="uri">{{ uri }}</span>
+    </div>
+    <div class="node-actions">
+      <button @click="$emit('open-qr', uri)" class="btn small secondary">QR</button>
+      <button @click="$emit('copy', uri)" class="btn small primary">کپی</button>
+    </div>
+  </div>
+</template>
+
+<script setup>
+defineProps({
+  index: Number,
+  uri: String
+});
+defineEmits(['open-qr', 'copy']);
+</script>
+
+<style scoped>
+.node-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: rgba(8, 14, 32, 0.45);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: var(--radius-md);
+  gap: 10px;
+  transition: border-color 0.2s;
+}
+.node-card:hover {
+  border-color: rgba(56, 189, 248, 0.18);
+}
+.node-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+.node-idx { color: var(--accent-cyan); font-weight: 700; font-size: 0.8rem; }
+.node-uri {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.node-actions { display: flex; gap: 6px; }
+</style>
+
+================================================================
+FILE: src/components/scanner/IpScanner.vue
+================================================================
+<template>
+  <div class="scanner-module">
+    <div class="card-header">
+      <h3>🧪 اسکنر پیشرفته آی‌پی کلودفلر</h3>
+      <p class="desc">مخزن ۳,۸۰۰+ آی‌پی واقعی کلودفلر — اسکن موازی با هندشیک TCP و تایید Colo</p>
+    </div>
+
+    <div v-if="!hasWorker" class="notice-box card">
+      ⚠️ برای اسکن دسته‌ای واقعی، آدرس Worker را در تنظیمات وارد کنید.
+    </div>
+    <div v-else class="notice-box ok card">
+      ✅ اسکن دسته‌ای Edge فعال — هندشیک TCP واقعی + تایید Colo
+    </div>
+
+    <!-- Pool Selector -->
+    <div class="pool-selector card">
+      <div class="selector-header">
+        <span>مخزن آی‌پی‌ها:</span>
+        <span class="pool-count font-mono text-cyan">{{ currentPoolCount.toLocaleString() }} آی‌پی</span>
+      </div>
+      <div class="chip-row">
+        <button @click="loadLargePool" class="chip-btn highlight">🌐 بارگذاری مخزن ۳,۸۰۰+</button>
+        <button @click="generateRandomSample(100)" class="chip-btn">🎲 ۱۰۰ آی‌پی</button>
+        <button @click="generateRandomSample(500)" class="chip-btn">🎲 ۵۰۰ آی‌پی</button>
+        <button @click="generateRandomSample(1500)" class="chip-btn">🎲 ۱,۵۰۰ آی‌پی</button>
+        <button @click="loadOperatorPreset('mci')" class="chip-btn">همراه اول</button>
+        <button @click="loadOperatorPreset('mtn')" class="chip-btn">ایرانسل</button>
+        <button @click="loadOperatorPreset('rightel')" class="chip-btn">رایتل</button>
+        <button @click="loadOperatorPreset('tci')" class="chip-btn">مخابرات</button>
+      </div>
+    </div>
+
+    <!-- Scanner Controls -->
+    <div class="scanner-controls-grid">
+      <div class="form-group card">
+        <label>لیست آی‌پی‌های هدف:</label>
+        <textarea 
+          v-model="rawIpsInput" 
+          rows="5" 
+          class="textarea-box font-mono" 
+          placeholder="104.16.1.1&#10;172.64.1.1&#10;162.158.1.1"
+        ></textarea>
+      </div>
+
+      <div class="config-side card">
+        <div class="grid-2">
+          <div class="form-group">
+            <label>تِردهای موازی:</label>
+            <select v-model="concurrency" class="input-box">
+              <option :value="4">4 (پایدار)</option>
+              <option :value="8">8 (پیش‌فرض)</option>
+              <option :value="16">16 (سریع)</option>
+              <option :value="32">32 (فوق‌سریع)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>تایم‌اوت (ms):</label>
+            <select v-model="timeoutMs" class="input-box">
+              <option :value="1500">1.5s</option>
+              <option :value="2500">2.5s</option>
+              <option :value="4000">4.0s</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="action-btn-row">
+          <button @click="handleStartScan" :disabled="isScanning" class="btn primary">
+            <span v-if="isScanning" class="spinner"></span>
+            {{ isScanning ? `اسکن (${scanProgress.current}/${scanProgress.total})...` : '🚀 شروع اسکن' }}
+          </button>
+          <button v-if="isScanning" @click="stopScan" class="btn danger">توقف</button>
+          <button v-if="results.length" @click="exportResultsCsv" class="btn secondary">CSV</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress Bar -->
+    <div v-if="isScanning" class="progress-bar-wrap">
+      <div class="progress-bar-fill" :style="{ width: progressPercent + '%' }"></div>
+    </div>
+
+    <!-- Live Logs -->
+    <div v-if="liveLogs.length" class="terminal-log-box card">
+      <div class="terminal-header">
+        <span class="terminal-title">📟 لاگ زنده اسکنر</span>
+        <button @click="liveLogs = []" class="btn small secondary">پاکسازی</button>
+      </div>
+      <div class="terminal-logs font-mono">
+        <div v-for="(log, idx) in liveLogs.slice(-25)" :key="idx" :class="['log-line', log.type]">
+          <span class="log-time">[{{ log.time }}]</span>
+          <span class="log-msg">{{ log.message }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Results Table -->
+    <div v-if="results.length" class="results-box card">
+      <div class="results-header">
+        <div class="stats">
+          <span>کل: <b>{{ results.length }}</b></span>
+          <span>سالم: <b class="text-green">{{ healthyCount }}</b></span>
+          <span>ناموفق: <b class="text-red">{{ failedCount }}</b></span>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>آدرس IP</th>
+              <th>تاخیر</th>
+              <th>Colo</th>
+              <th>منبع</th>
+              <th>وضعیت</th>
+              <th>سرعت</th>
+              <th>عملیات</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(item, idx) in displayResults" :key="item.ip">
+              <td>{{ idx + 1 }}</td>
+              <td class="font-mono text-cyan font-bold">{{ item.ip }}</td>
+              <td class="font-mono">
+                <span v-if="item.latency !== null" :class="getLatencyClass(item.latency)">{{ item.latency }} ms</span>
+                <span v-else-if="item.status === 'testing'" class="text-yellow">تست...</span>
+                <span v-else class="text-red">Timeout</span>
+              </td>
+              <td class="font-mono text-muted">
+                <span v-if="item.colo" class="text-green">{{ item.colo }}</span>
+                <span v-if="item.crossVerified" class="verified-badge">✓✓</span>
+                <span v-if="item.city" class="text-muted"> — {{ item.city }}</span>
+                <span v-if="!item.colo">-</span>
+              </td>
+              <td class="font-mono text-muted">
+                {{ item.source === 'edge' ? '🌐 Edge' : item.source === 'local' ? '📱 محلی' : '-' }}
+              </td>
+              <td>
+                <span :class="['badge', item.status]">
+                  {{ item.status === 'ok' ? 'سالم' : item.status === 'testing' ? 'تست' : 'ناموفق' }}
+                </span>
+              </td>
+              <td>
+                <span v-if="item.speedMbps" class="text-green font-bold">{{ item.speedMbps }} MB/s</span>
+                <button v-else-if="item.status === 'ok'" @click="runSpeed(item)" :disabled="item.speedTesting" class="btn small secondary">
+                  {{ item.speedTesting ? '...' : 'تست سرعت' }}
+                </button>
+                <span v-else class="text-muted">-</span>
+              </td>
+              <td>
+                <button @click="$emit('select-clean-ip', item.ip)" class="btn small primary">
+                  انتقال به بهینه‌ساز
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted } from 'vue';
+import { useScanner } from '../../composables/useScanner';
+import { generateRandomCloudflareIps } from '../../utils/scanner/ipPool';
+import { getWorkerUrl } from '../../utils/workerApi';
+
+const emit = defineEmits(['select-clean-ip']);
+
+const {
+  rawIpsInput,
+  concurrency,
+  timeoutMs,
+  isScanning,
+  results,
+  scanProgress,
+  healthyCount,
+  failedCount,
+  displayResults,
+  startScan,
+  stopScan,
+  runSpeed
+} = useScanner();
+
+const largePoolIps = ref([]);
+const liveLogs = ref([]);
+const hasWorker = computed(() => !!getWorkerUrl());
+const operatorPresets = ref({
+  mci: { name: 'همراه اول', ips: ['104.16.1.1', '104.16.12.1', '172.64.80.1'] },
+  mtn: { name: 'ایرانسل', ips: ['104.16.2.1', '104.17.3.1', '172.67.1.1'] },
+  rightel: { name: 'رایتل', ips: ['104.16.5.1', '104.17.8.1', '172.64.120.1'] },
+  tci: { name: 'مخابرات و شاتل', ips: ['104.16.100.1', '104.17.150.1', '172.67.150.1'] }
+});
+
+onMounted(async () => {
+  try {
+    const res = await fetch('./data/cloudflare-ips.json');
+    const data = await res.json();
+    largePoolIps.value = data.ips || [];
+  } catch {
+    largePoolIps.value = generateRandomCloudflareIps(500);
+  }
+  try {
+    const opRes = await fetch('./data/operator-presets.json');
+    operatorPresets.value = await opRes.json();
+  } catch {}
+});
+
+const currentPoolCount = computed(() => rawIpsInput.value.split('\n').filter(i => i.trim().length > 0).length);
+const progressPercent = computed(() => {
+  if (!scanProgress.value.total) return 0;
+  return Math.round((scanProgress.value.current / scanProgress.value.total) * 100);
+});
+
+const loadLargePool = () => { rawIpsInput.value = largePoolIps.value.slice(0, 1000).join('\n'); };
+const generateRandomSample = (count) => { rawIpsInput.value = generateRandomCloudflareIps(count).join('\n'); };
+const loadOperatorPreset = (key) => {
+  if (operatorPresets.value[key]?.ips) rawIpsInput.value = operatorPresets.value[key].ips.join('\n');
+};
+
+const handleStartScan = async () => {
+  liveLogs.value = [];
+  const nowStr = () => new Date().toTimeString().split(' ')[0];
+  const modeMsg = hasWorker.value ? 'اسکن دسته‌ای Edge (TCP + Colo)...' : `اسکن محلی با ${concurrency.value} ترد`;
+  liveLogs.value.push({ time: nowStr(), message: modeMsg, type: 'info' });
+  await startScan();
+  const ok = results.value.filter(r => r?.status === 'ok');
+  liveLogs.value.push({ time: nowStr(), message: `اسکن کامل — ${ok.length} آی‌پی تمیز`, type: 'success' });
+};
+
+const exportResultsCsv = () => {
+  const rows = [['IP', 'Latency', 'Colo', 'City', 'Source', 'Status', 'Speed']];
+  displayResults.value.forEach(r => rows.push([r.ip, r.latency || '', r.colo || '', r.city || '', r.source || '', r.status, r.speedMbps || '']));
+  const csvContent = 'data:text/csv;charset=utf-8,' + rows.map(e => e.join(',')).join('\n');
+  const link = document.createElement('a');
+  link.setAttribute('href', encodeURI(csvContent));
+  link.setAttribute('download', `cf_ips_${Date.now()}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
+const getLatencyClass = (lat) => {
+  if (lat < 130) return 'text-green font-bold';
+  if (lat < 220) return 'text-yellow';
+  return 'text-red';
+};
+</script>
+
+<style scoped>
+.scanner-module { display: flex; flex-direction: column; gap: 16px; }
+.notice-box {
+  font-size: 0.80rem;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: rgba(251, 191, 36, 0.06);
+  border: 1px solid rgba(251, 191, 36, 0.20);
+  color: #fbbf24;
+}
+.notice-box.ok {
+  background: rgba(16, 185, 129, 0.06);
+  border-color: rgba(16, 185, 129, 0.20);
+  color: #34d399;
+}
+.verified-badge { color: #3ddc84; font-size: 0.65rem; margin-inline-start: 3px; font-weight: 800; }
+
+.pool-selector { padding: 14px; }
+.selector-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  margin-bottom: 10px;
+  color: #b8c9e2;
+}
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-btn {
+  background: rgba(30, 41, 59, 0.50);
+  color: #b8c9e2;
+  border: 1px solid rgba(56, 189, 248, 0.10);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  backdrop-filter: blur(6px);
+}
+.chip-btn:hover { background: rgba(37, 99, 235, 0.15); color: #fff; border-color: rgba(56, 189, 248, 0.25); }
+.chip-btn.highlight { border-color: rgba(56, 189, 248, 0.30); color: var(--accent-cyan); font-weight: 700; }
+
+.scanner-controls-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 14px;
+}
+.config-side { display: flex; flex-direction: column; justify-content: space-between; }
+.action-btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+.progress-bar-wrap { width: 100%; height: 4px; background: rgba(30, 41, 59, 0.60); border-radius: 2px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: linear-gradient(90deg, #2563eb, #38bdf8); transition: width 0.3s ease; border-radius: 2px; }
+
+.terminal-log-box { padding: 12px; }
+.terminal-header { display: flex; justify-content: space-between; align-items: center; }
+.terminal-title { font-size: 0.78rem; font-weight: 700; color: var(--accent-cyan); }
+.terminal-logs {
+  font-size: 0.73rem;
+  max-height: 140px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+}
+.log-line { display: flex; gap: 8px; }
+.log-time { color: var(--text-muted); }
+.log-line.info .log-msg { color: #8da4c7; }
+.log-line.success .log-msg { color: #34d399; font-weight: 700; }
+.log-line.error .log-msg { color: #f87171; }
+
+.results-box { display: flex; flex-direction: column; gap: 12px; }
+.results-header { display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; }
+.stats { display: flex; gap: 14px; }
+
+@media (max-width: 768px) {
+  .scanner-controls-grid { grid-template-columns: 1fr; }
+}
+</style>
+
+================================================================
+FILE: src/components/misub/SubscriptionHub.vue
+================================================================
+<template>
+  <div class="misub-hub-suite">
+    <div class="card-header">
+      <h3>📋 مرکز مدیریت سابسکریپشن MiSub</h3>
+      <p class="desc">پشتیبانی از تمام فرمت‌های لینک ساب، رمزگشایی انواع پروتکل‌ها، فیلتر و تست پینگ زنده</p>
+    </div>
+
+    <!-- Fetch / Paste -->
+    <div class="card">
+      <div class="form-group">
+        <label>آدرس سابسکریپشن ریموت:</label>
+        <div class="input-with-btn">
+          <input v-model="subUrl" placeholder="https://example.com/sub/token..." class="input-box font-mono" />
+          <button @click="handleFetch" :disabled="loading" class="btn primary">
+            <span v-if="loading" class="spinner"></span>
+            {{ loading ? 'دریافت...' : '📥 دریافت' }}
+          </button>
+        </div>
+        <p v-if="fetchStatus" class="fetch-status" :class="fetchStatus.startsWith('❌') ? 'text-red' : 'text-green'">{{ fetchStatus }}</p>
+      </div>
+
+      <div class="form-group">
+        <label>یا وارد کردن مستقیم کانفیگ‌ها:</label>
+        <textarea 
+          v-model="rawInput" 
+          rows="4" 
+          class="textarea-box font-mono" 
+          placeholder="vless://...&#10;vmess://...&#10;trojan://...&#10;ss://..."
+        ></textarea>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div v-if="parsedNodes.length" class="card toolbar-box">
+      <div class="search-filter-row">
+        <input v-model="searchQuery" placeholder="جستجو در نام، آدرس، پورت..." class="input-box search-input" />
+        <div class="tools-btn-group">
+          <button @click="testAllPings" :disabled="testingPings" class="btn small primary">
+            <span v-if="testingPings" class="spinner"></span>
+            {{ testingPings ? 'تست...' : '📡 تست پینگ' }}
+          </button>
+          <button @click="removeDuplicates" class="btn small secondary">حذف تکراری</button>
+          <button @click="showDoctor = !showDoctor" class="btn small secondary">
+            {{ showDoctor ? 'بستن' : '🩺 دکتر نود' }}
+          </button>
+          <button @click="showConverter = !showConverter" class="btn small secondary">
+            {{ showConverter ? 'بستن' : '🔗 مبدل کلاینت' }}
+          </button>
+          <button @click="sendAllToOptimizer" class="btn small success">⚡ انتقال به بهینه‌ساز</button>
+        </div>
+      </div>
+
+      <div class="protocol-chips">
+        <button :class="['chip', { active: selectedProto === 'all' }]" @click="selectedProto = 'all'">
+          همه ({{ parsedNodes.length }})
+        </button>
+        <button 
+          v-for="(count, proto) in protoCounts" :key="proto"
+          :class="['chip', { active: selectedProto === proto }]"
+          @click="selectedProto = proto"
+        >
+          <span :class="['badge', proto]">{{ proto.toUpperCase() }}</span>
+          <span>({{ count }})</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Live Logs -->
+    <div v-if="nodeLogs.length" class="terminal-log-box card">
+      <div class="terminal-header">
+        <span class="terminal-title">📟 لاگ زنده تست پینگ</span>
+        <button @click="nodeLogs = []" class="btn small secondary">پاکسازی</button>
+      </div>
+      <div class="terminal-logs font-mono">
+        <div v-for="(log, idx) in nodeLogs.slice(-25)" :key="idx" :class="['log-line', log.type]">
+          <span class="log-time">[{{ log.time }}]</span>
+          <span class="log-msg">{{ log.message }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sub-panels -->
+    <NodeDoctorPanel v-if="showDoctor && parsedNodes.length" :nodes="filteredNodes" />
+    <ClientConverterWorkspace v-if="showConverter && parsedNodes.length" :nodes="filteredNodes" />
+
+    <!-- Nodes Grid -->
+    <div v-if="filteredNodes.length" class="nodes-grid">
+      <div v-for="node in filteredNodes" :key="node.id" class="node-item">
+        <div class="node-header">
+          <span :class="['badge', node.protocol]">{{ node.protocol.toUpperCase() }}</span>
+          <span class="node-title" :title="node.name">{{ node.name }}</span>
+          <span v-if="nodePings[node.id] !== undefined" :class="['ping-pill', getPingClass(nodePings[node.id])]">
+            {{ nodePings[node.id] !== null ? nodePings[node.id] + ' ms' : 'Timeout' }}
+          </span>
+        </div>
+
+        <div class="node-meta font-mono">
+          <div><span class="meta-label">آدرس:</span> {{ node.address }}:{{ node.port }}</div>
+          <div v-if="node.sni"><span class="meta-label">SNI:</span> {{ node.sni }}</div>
+          <div><span class="meta-label">شبکه:</span> {{ node.type }} | {{ node.security }}</div>
+        </div>
+
+        <div class="node-actions">
+          <button @click="testSingleNodePing(node)" class="btn-text">تست پینگ</button>
+          <button @click="copyText(node.raw)" class="btn-text">کپی لینک</button>
+          <button @click="$emit('select-node-to-optimize', node.raw)" class="btn-text highlight">بهینه‌سازی</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref } from 'vue';
+import { useSubscriptions } from '../../composables/useSubscriptions';
+import { pingNodeHost } from '../../utils/scanner/scannerEngine';
+import NodeDoctorPanel from './NodeDoctorPanel.vue';
+import ClientConverterWorkspace from './ClientConverterWorkspace.vue';
+
+const emit = defineEmits(['send-to-optimizer', 'select-node-to-optimize']);
+
+const {
+  subUrl,
+  rawInput,
+  loading,
+  fetchStatus,
+  searchQuery,
+  selectedProto,
+  parsedNodes,
+  protoCounts,
+  filteredNodes,
+  fetchRemote,
+  removeDuplicates
+} = useSubscriptions();
+
+const showDoctor = ref(false);
+const showConverter = ref(false);
+const nodePings = ref({});
+const testingPings = ref(false);
+const nodeLogs = ref([]);
+
+const nowStr = () => new Date().toTimeString().split(' ')[0];
+
+const handleFetch = async () => {
+  const worker = localStorage.getItem('cf_hub_worker_url') || '';
+  nodeLogs.value.push({ time: nowStr(), message: 'در حال دریافت...', type: 'info' });
+  await fetchRemote(worker);
+  nodeLogs.value.push({ time: nowStr(), message: `دریافت شد — ${parsedNodes.value.length} نود`, type: 'success' });
+};
+
+const testSingleNodePing = async (node) => {
+  nodePings.value[node.id] = null;
+  const res = await pingNodeHost(node);
+  nodePings.value[node.id] = res.latency;
+  nodeLogs.value.push({
+    time: nowStr(),
+    message: res.status === 'ok' ? `✅ ${node.name}: ${res.latency}ms` : `❌ ${node.name}: Timeout`,
+    type: res.status === 'ok' ? 'success' : 'error'
+  });
+};
+
+const testAllPings = async () => {
+  testingPings.value = true;
+  for (const node of filteredNodes.value.slice(0, 30)) await testSingleNodePing(node);
+  testingPings.value = false;
+};
+
+const getPingClass = (lat) => {
+  if (lat === null) return 'text-red font-bold';
+  if (lat < 140) return 'text-green font-bold';
+  if (lat < 250) return 'text-yellow';
+  return 'text-red';
+};
+
+const copyText = async (text) => { await navigator.clipboard.writeText(text); alert('کپی شد!'); };
+
+const sendAllToOptimizer = () => {
+  emit('send-to-optimizer', filteredNodes.value.map(n => n.raw).join('\n'));
+};
+</script>
+
+<style scoped>
+.misub-hub-suite { display: flex; flex-direction: column; gap: 16px; }
+.input-with-btn { display: flex; gap: 8px; }
+.fetch-status { font-size: 0.76rem; margin-top: 6px; }
+.toolbar-box { display: flex; flex-direction: column; gap: 12px; }
+.search-filter-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.search-input { max-width: 260px; }
+.tools-btn-group { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.protocol-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(30, 41, 59, 0.50);
+  color: #b8c9e2;
+  border: 1px solid rgba(56, 189, 248, 0.10);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.chip.active {
+  background: rgba(37, 99, 235, 0.30);
+  color: #fff;
+  border-color: rgba(56, 189, 248, 0.30);
+}
+
+.terminal-log-box { padding: 12px; }
+.terminal-header { display: flex; justify-content: space-between; align-items: center; }
+.terminal-title { font-size: 0.78rem; font-weight: 700; color: var(--accent-cyan); }
+.terminal-logs { font-size: 0.73rem; max-height: 140px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+.log-line { display: flex; gap: 8px; }
+.log-time { color: var(--text-muted); }
+.log-line.info .log-msg { color: #8da4c7; }
+.log-line.success .log-msg { color: #34d399; font-weight: 700; }
+.log-line.error .log-msg { color: #f87171; }
+
+.nodes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.node-item {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px;
+  background: rgba(14, 22, 46, 0.55);
+  border: 1px solid rgba(56, 189, 248, 0.10);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(12px);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.node-item:hover {
+  border-color: rgba(56, 189, 248, 0.25);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.06);
+}
+.node-header { display: flex; align-items: center; gap: 8px; }
+.node-title {
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.ping-pill { font-size: 0.72rem; font-family: monospace; direction: ltr; }
+.node-meta { font-size: 0.76rem; color: #8da4c7; display: flex; flex-direction: column; gap: 2px; }
+.meta-label { color: #5a7094; }
+.node-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 14px;
+  border-top: 1px solid rgba(56, 189, 248, 0.06);
+  padding-top: 8px;
+}
+.btn-text {
+  background: none;
+  border: none;
+  color: #8da4c7;
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.btn-text:hover { color: var(--text-primary); }
+.btn-text.highlight { color: var(--accent-cyan); font-weight: 700; }
+</style>
+
+================================================================
+FILE: src/components/misub/NodeDoctorPanel.vue
+================================================================
+<template>
+  <div class="doctor-card card">
+    <div class="doctor-header">
+      <h4>🩺 دکتر نود و بررسی سلامت کانفیگ‌ها</h4>
+      <p class="desc">تحلیل خطاهای سینتکس، پورت‌های نامعتبر، UUID ناقص و پروتکل‌های شکسته</p>
+    </div>
+
+    <div v-if="reports.length" class="reports-list">
+      <div v-for="r in reports" :key="r.nodeId" :class="['report-item', r.healthy ? 'healthy' : 'unhealthy']">
+        <div class="report-top">
+          <span :class="['badge', r.protocol]">{{ r.protocol.toUpperCase() }}</span>
+          <span class="node-name">{{ r.nodeName }}</span>
+          <span :class="['badge', r.healthy ? 'ok' : 'error']">{{ r.healthy ? 'سالم' : 'خطا' }}</span>
+        </div>
+        <ul v-if="r.issues.length" class="issue-list">
+          <li v-for="(iss, i) in r.issues" :key="i" class="text-red">⚠️ {{ iss }}</li>
+        </ul>
+      </div>
+    </div>
+    <div v-else class="text-muted text-center">نودی برای بررسی بارگذاری نشده.</div>
+  </div>
+</template>
+
+<script setup>
+import { computed } from 'vue';
+import { diagnoseNodes } from '../../utils/operators/nodeDoctor';
+
+const props = defineProps({ nodes: Array });
+const reports = computed(() => diagnoseNodes(props.nodes || []));
+</script>
+
+<style scoped>
+.doctor-card { padding: 16px; }
+.doctor-header h4 { color: var(--accent-cyan); font-size: 0.90rem; }
+.desc { font-size: 0.76rem; color: var(--text-secondary); margin-top: 2px; }
+.reports-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; max-height: 260px; overflow-y: auto; }
+.report-item {
+  background: rgba(8, 14, 32, 0.45);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  transition: border-color 0.2s;
+}
+.report-item.healthy { border-color: rgba(16, 185, 129, 0.20); }
+.report-item.unhealthy { border-color: rgba(239, 68, 68, 0.20); }
+.report-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.node-name { font-size: 0.78rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.issue-list { font-size: 0.73rem; margin-top: 6px; padding-right: 14px; }
+</style>
+
+================================================================
+FILE: src/components/misub/ClientConverterWorkspace.vue
+================================================================
+<template>
+  <div class="converter-card card">
+    <div class="converter-header">
+      <h4>🔗 مبدل فرمت سابسکریپشن به کلاینت‌ها</h4>
+      <p class="desc">تبدیل مستقیم نودها به فرمت کلاینت‌های محبوب</p>
+    </div>
+
+    <div class="format-buttons">
+      <button @click="convert('clash')" class="btn small secondary">Clash Meta</button>
+      <button @click="convert('singbox')" class="btn small secondary">Sing-box</button>
+      <button @click="convert('quantumultx')" class="btn small secondary">Quantumult X</button>
+      <button @click="convert('surge')" class="btn small secondary">Surge</button>
+      <button @click="convert('loon')" class="btn small secondary">Loon</button>
+      <button @click="convert('base64')" class="btn small secondary">V2Ray</button>
+    </div>
+
+    <div v-if="convertedText" class="converted-output">
+      <div class="converted-top">
+        <span class="badge ok">{{ currentFormat.toUpperCase() }}</span>
+        <button @click="copyConverted" class="btn small primary">کپی</button>
+      </div>
+      <textarea :value="convertedText" rows="6" readonly class="textarea-box font-mono"></textarea>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref } from 'vue';
+import { convertNodesToClient } from '../../utils/converters';
+
+const props = defineProps({ nodes: Array });
+const convertedText = ref('');
+const currentFormat = ref('clash');
+
+const convert = (format) => {
+  currentFormat.value = format;
+  convertedText.value = convertNodesToClient(props.nodes, format);
+};
+
+const copyConverted = async () => {
+  await navigator.clipboard.writeText(convertedText.value);
+  alert('کپی شد!');
+};
+</script>
+
+<style scoped>
+.converter-card { padding: 16px; }
+.converter-header h4 { color: var(--accent-cyan); font-size: 0.90rem; }
+.desc { font-size: 0.76rem; color: var(--text-secondary); margin-top: 2px; }
+.format-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.converted-output { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.converted-top { display: flex; justify-content: space-between; align-items: center; }
+</style>
+
+================================================================
+FILE: src/components/tools/DohLab.vue
+================================================================
+<template>
+  <div class="doh-card card">
+    <div class="doh-header">
+      <h4>🌐 آزمایشگاه DNS-over-HTTPS (DoH)</h4>
+      <p class="desc">تفکیک نام دامنه از طریق سرورهای رمزنگاری‌شده</p>
+    </div>
+
+    <div class="grid-2">
+      <div class="form-group">
+        <label>دامنه هدف:</label>
+        <input v-model="domain" placeholder="speed.cloudflare.com" class="input-box font-mono" />
+      </div>
+      <div class="form-group">
+        <label>ارائه‌دهنده DoH:</label>
+        <select v-model="provider" class="input-box font-mono">
+          <option value="https://cloudflare-dns.com/dns-query">Cloudflare (1.1.1.1)</option>
+          <option value="https://dns.google/resolve">Google (8.8.8.8)</option>
+          <option value="https://dns.quad9.net/dns-query">Quad9 (9.9.9.9)</option>
+        </select>
+      </div>
+    </div>
+
+    <button @click="resolve" :disabled="loading || !domain.trim()" class="btn primary small">
+      <span v-if="loading" class="spinner"></span>
+      {{ loading ? 'حل دامنه...' : '🔍 Resolve' }}
+    </button>
+
+    <div v-if="statusMsg" :class="['status-box', statusType]">{{ statusMsg }}</div>
+
+    <div v-if="resolvedIps.length" class="resolved-results">
+      <span class="label">آی‌پی‌های پاسخ:</span>
+      <div class="ip-chips">
+        <span v-for="ip in resolvedIps" :key="ip" class="chip font-mono text-cyan">{{ ip }}</span>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref } from 'vue';
+import { resolveDoH } from '../../utils/scanner/doh';
+
+const domain = ref('speed.cloudflare.com');
+const provider = ref('https://cloudflare-dns.com/dns-query');
+const loading = ref(false);
+const resolvedIps = ref([]);
+const statusMsg = ref('');
+const statusType = ref('ok');
+
+const resolve = async () => {
+  if (!domain.value.trim()) return;
+  loading.value = true;
+  statusMsg.value = '';
+  resolvedIps.value = [];
+  try {
+    const ips = await resolveDoH(domain.value.trim(), provider.value);
+    resolvedIps.value = ips;
+    statusMsg.value = ips.length > 0 ? `✅ ${ips.length} آی‌پی دریافت شد` : '⚠️ پاسخی دریافت نشد';
+    statusType.value = ips.length > 0 ? 'ok' : 'err';
+  } catch (err) {
+    statusMsg.value = `❌ ${err.message}`;
+    statusType.value = 'err';
+  } finally {
+    loading.value = false;
+  }
+};
+</script>
+
+<style scoped>
+.doh-card { padding: 16px; }
+.doh-header h4 { color: var(--accent-cyan); font-size: 0.90rem; }
+.desc { font-size: 0.76rem; color: var(--text-secondary); margin-top: 2px; }
+.status-box { margin-top: 10px; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 0.78rem; }
+.status-box.ok { background: rgba(16, 185, 129, 0.10); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.20); }
+.status-box.err { background: rgba(239, 68, 68, 0.10); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.20); }
+.resolved-results { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.ip-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  background: rgba(8, 14, 32, 0.50);
+  border: 1px solid rgba(56, 189, 248, 0.12);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: 0.74rem;
+}
+</style>
+
+================================================================
+FILE: src/components/tools/GeoIpInspector.vue
+================================================================
+<template>
+  <div class="geoip-card card">
+    <div class="geoip-header">
+      <h4>📍 تحلیل موقعیت و ASN آی‌پی (GeoIP Inspector)</h4>
+      <p class="desc">بررسی کشور، شهر، سازمان و ASN آی‌پی‌های تست‌شده</p>
+    </div>
+
+    <div class="form-group">
+      <label>آدرس IP هدف:</label>
+      <div class="input-with-btn">
+        <input v-model="targetIp" placeholder="104.16.1.1" class="input-box font-mono" />
+        <button @click="inspect" :disabled="loading || !targetIp.trim()" class="btn primary small">
+          {{ loading ? '...' : '🔍 استعلام' }}
+        </button>
+      </div>
+    </div>
+
+    <div v-if="geoData" class="geo-details font-mono">
+      <div><b>کشور:</b> {{ geoData.country || '-' }} ({{ geoData.country_code || '-' }})</div>
+      <div><b>شهر / منطقه:</b> {{ geoData.city || '-' }} / {{ geoData.region || '-' }}</div>
+      <div><b>سازمان / ISP:</b> {{ geoData.connection?.isp || geoData.org || '-' }}</div>
+      <div><b>ASN:</b> {{ geoData.connection?.asn || '-' }}</div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref } from 'vue';
+
+const targetIp = ref('104.16.1.1');
+const loading = ref(false);
+const geoData = ref(null);
+
+const inspect = async () => {
+  if (!targetIp.value.trim()) return;
+  loading.value = true;
+  try {
+    const res = await fetch(`https://ipwho.is/${targetIp.value.trim()}`);
+    geoData.value = await res.json();
+  } catch (e) {
+    alert('خطا در استعلام GeoIP: ' + e.message);
+  } finally {
+    loading.value = false;
+  }
+};
+</script>
+
+<style scoped>
+.geoip-card { padding: 16px; }
+.geoip-header h4 { color: var(--accent-cyan); font-size: 0.90rem; }
+.desc { font-size: 0.76rem; color: var(--text-secondary); margin-top: 2px; }
+.input-with-btn { display: flex; gap: 8px; }
+.geo-details {
+  margin-top: 12px;
+  background: rgba(8, 14, 32, 0.50);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  font-size: 0.78rem;
+  color: #b8c9e2;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.geo-details b { color: var(--text-primary); }
+</style>
+
+================================================================
+FILE: src/components/settings/WorkerProxySettings.vue
+================================================================
+<template>
+  <div class="settings-suite">
+    <div class="card-header">
+      <h3>🛠️ دیتابیس و تنظیمات سرورلس</h3>
+      <p class="desc">مدیریت حافظه محلی، بکاپ JSON، تنظیمات Cloudflare Worker</p>
+    </div>
+
+    <!-- Database Management -->
+    <div class="card db-card">
+      <div class="db-header">
+        <h4>💾 مدیریت پایگاه داده</h4>
+        <span class="badge ok">حافظه فعال</span>
+      </div>
+      <p class="desc">تغییرات به صورت خودکار در حافظه دستگاه ذخیره می‌شوند.</p>
+      <div class="db-actions">
+        <button @click="downloadBackup" class="btn small success">📥 دانلود بکاپ JSON</button>
+        <label class="btn small secondary import-label">
+          📤 بازیابی بکاپ
+          <input type="file" accept=".json" @change="handleImportBackup" style="display: none;" />
+        </label>
+        <button @click="resetDatabase" class="btn small danger">🗑️ ریست دیتابیس</button>
+      </div>
+    </div>
+
+    <!-- Worker URL -->
+    <div class="card">
+      <div class="form-group">
+        <label>آدرس Cloudflare Worker:</label>
+        <input 
+          v-model="workerUrlInput" 
+          placeholder="https://your-worker-name.workers.dev" 
+          class="input-box font-mono" 
+        />
+        <span class="hint">کدهای Worker در کادر زیر قرار دارد.</span>
+      </div>
+
+      <div class="action-row">
+        <button @click="save" class="btn primary">ذخیره آدرس Worker</button>
+        <button @click="testConnection" :disabled="testing" class="btn secondary">
+          <span v-if="testing" class="spinner"></span>
+          {{ testing ? 'تست...' : 'تست اتصال' }}
+        </button>
+      </div>
+
+      <div v-if="testStatus" :class="['status-box', testStatus.success ? 'ok' : 'err']">
+        {{ testStatus.message }}
+      </div>
+    </div>
+
+    <!-- Worker Script -->
+    <div class="card worker-code-card">
+      <div class="code-header">
+        <h4>📄 اسکریپت آماده Worker</h4>
+        <button @click="copyWorkerCode" class="btn small success">📋 کپی</button>
+      </div>
+      <textarea :value="workerScriptCode" rows="10" readonly class="textarea-box font-mono code-box"></textarea>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted } from 'vue';
+import { workerUrl, saveWorkerUrl } from '../../stores/workerConfig';
+import { db } from '../../utils/db';
+
+const workerUrlInput = ref('');
+const testing = ref(false);
+const testStatus = ref(null);
+
+onMounted(() => { workerUrlInput.value = workerUrl.value; });
+
+const save = () => {
+  saveWorkerUrl(workerUrlInput.value);
+  alert('آدرس ورکر ذخیره شد.');
+};
+
+const downloadBackup = () => {
+  const jsonStr = db.exportAllBackup();
+  const blob = new Blob([jsonStr], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `misub_backup_${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+const handleImportBackup = (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const success = db.importAllBackup(e.target?.result);
+    if (success) { alert('بازیابی شد.'); window.location.reload(); }
+    else alert('خطا در خواندن فایل.');
+  };
+  reader.readAsText(file);
+};
+
+const resetDatabase = () => {
+  if (confirm('ریست کامل حافظه؟')) {
+    db.clearAll();
+    window.location.reload();
+  }
+};
+
+const testConnection = async () => {
+  if (!workerUrlInput.value.trim()) {
+    testStatus.value = { success: false, message: 'آدرس Worker را وارد کنید.' };
+    return;
+  }
+  testing.value = true;
+  testStatus.value = null;
+  try {
+    const res = await fetch(`${workerUrlInput.value.trim().replace(/\/$/, '')}/api/ping`);
+    const data = await res.json();
+    testStatus.value = data.success
+      ? { success: true, message: '✅ ارتباط با Worker برقرار!' }
+      : { success: false, message: 'پاسخ نامعتبر.' };
+  } catch (err) {
+    testStatus.value = { success: false, message: `❌ ${err.message}` };
+  } finally {
+    testing.value = false;
+  }
+};
+
+const workerScriptCode = ref(`/**
+ * Cloudflare Worker Enterprise Backend & Universal CORS Proxy
+ */
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, User-Agent, X-Requested-With, Cache-Control, Accept',
+  'Access-Control-Expose-Headers': 'Subscription-Userinfo, Content-Disposition, Content-Length',
+  'Access-Control-Max-Age': '86400',
+};
+
+export default {
+  async fetch(request, env, ctx) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+    const url = new URL(request.url);
+    const pathname = url.pathname;
+    try {
+      if (pathname === '/' || pathname === '/api') {
+        return new Response(JSON.stringify({ status: 'online', service: 'MiSub & CF Universal Proxy' }), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+        });
+      }
+      if (pathname === '/api/proxy-fetch' || pathname === '/api/fetch-sub') {
+        let targetUrl = url.searchParams.get('url');
+        let customUa = url.searchParams.get('ua') || request.headers.get('User-Agent') || 'v2rayNG/1.8.12';
+        if (!targetUrl && request.method === 'POST') {
+          const body = await request.json().catch(() => ({}));
+          targetUrl = body.url;
+          if (body.userAgent) customUa = body.userAgent;
+        }
+        if (!targetUrl) {
+          return new Response(JSON.stringify({ success: false, error: 'url required' }), {
+            status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+          });
+        }
+        const subRes = await fetch(targetUrl, { headers: { 'User-Agent': customUa } });
+        const rawData = await subRes.text();
+        const userinfo = subRes.headers.get('Subscription-Userinfo') || '';
+        if (request.method === 'GET') {
+          return new Response(rawData, {
+            status: subRes.status,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'text/plain; charset=utf-8', 'Subscription-Userinfo': userinfo }
+          });
+        }
+        return new Response(JSON.stringify({ success: true, userinfo, data: rawData }), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+        });
+      }
+      if (pathname === '/api/ping') {
+        return new Response(JSON.stringify({ success: true, timestamp: Date.now() }), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ error: 'Not Found' }), { status: 404, headers: CORS_HEADERS });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: CORS_HEADERS });
+    }
+  }
+};`);
+
+const copyWorkerCode = async () => {
+  await navigator.clipboard.writeText(workerScriptCode.value);
+  alert('کد Worker کپی شد!');
+};
+</script>
+
+<style scoped>
+.settings-suite { display: flex; flex-direction: column; gap: 16px; }
+.db-card { border-color: rgba(56, 189, 248, 0.20) !important; }
+.db-header { display: flex; justify-content: space-between; align-items: center; }
+.db-header h4 { color: var(--accent-cyan); font-size: 0.92rem; }
+.db-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.import-label { cursor: pointer; }
+.hint { font-size: 0.74rem; color: var(--text-muted); margin-top: 4px; display: block; }
+.action-row { display: flex; gap: 10px; margin-top: 12px; }
+.status-box {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.84rem;
+}
+.status-box.ok {
+  background: rgba(16, 185, 129, 0.10);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+.status-box.err {
+  background: rgba(239, 68, 68, 0.10);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+.worker-code-card { display: flex; flex-direction: column; gap: 10px; }
+.code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.code-header h4 { font-size: 0.88rem; color: var(--text-primary); }
+.code-box { font-size: 0.76rem; line-height: 1.5; color: #a5f3fc; }
+</style>
+
+================================================================
+FILE: src/App.vue
+================================================================
+<template>
+  <div class="app-layout">
+    <!-- Top Header -->
+    <Header 
+      :current-tab="appState.activeTab" 
+      :tabs="tabs" 
+      @change-tab="switchTab" 
+    />
+
+    <!-- Main Workspace Views -->
+    <main class="main-content">
+      <div class="container">
+        <OptimizerView 
+          v-show="appState.activeTab === 'optimizer'"
+          @navigate="switchTab"
+        />
+        <ScannerView 
+          v-show="appState.activeTab === 'scanner'"
+          @navigate="switchTab"
+        />
+        <SubscriptionsView 
+          v-show="appState.activeTab === 'misub'"
+          @navigate="switchTab"
+        />
+        <ToolsView 
+          v-show="appState.activeTab === 'tools'"
+          @navigate="switchTab"
+        />
+        <SettingsView 
+          v-show="appState.activeTab === 'settings'"
+          @navigate="switchTab"
+        />
+      </div>
+    </main>
+
+    <!-- Mobile Bottom Nav -->
+    <MobileNav 
+      :current-tab="appState.activeTab" 
+      :tabs="tabs" 
+      @change-tab="switchTab" 
+    />
+
+    <!-- Toast Notifications -->
+    <Toast :notifications="appState.notifications" />
+
+    <!-- Footer -->
+    <Footer />
+  </div>
+</template>
+
+<script setup>
+import { appState } from './stores/appState';
+
+import Header from './components/layout/Header.vue';
+import MobileNav from './components/layout/MobileNav.vue';
+import Footer from './components/layout/Footer.vue';
+import Toast from './components/layout/Toast.vue';
+
+import OptimizerView from './views/OptimizerView.vue';
+import ScannerView from './views/ScannerView.vue';
+import SubscriptionsView from './views/SubscriptionsView.vue';
+import ToolsView from './views/ToolsView.vue';
+import SettingsView from './views/SettingsView.vue';
+
+const tabs = [
+  { id: 'optimizer', label: '⚡ بهینه‌ساز', shortLabel: 'بهینه‌ساز', icon: '⚡' },
+  { id: 'scanner', label: '🧪 اسکنر IP', shortLabel: 'اسکنر', icon: '🧪' },
+  { id: 'misub', label: '📋 سابسکریپشن', shortLabel: 'ساب', icon: '📋' },
+  { id: 'tools', label: '🌐 ابزارها', shortLabel: 'ابزارها', icon: '🌐' },
+  { id: 'settings', label: '🛠️ تنظیمات', shortLabel: 'تنظیمات', icon: '🛠️' }
+];
+
+const switchTab = (tabId) => {
+  appState.activeTab = tabId;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+</script>
+
+<style scoped>
+.app-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 64px;
+}
+.main-content {
+  flex: 1;
+  padding: 20px;
+}
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+@media (min-width: 769px) {
+  .app-layout {
+    padding-bottom: 0;
+  }
+}
+</style>
+
+================================================================
+END OF REPORT
+================================================================

@@ -370,12 +370,34 @@ export default {
         return jsonResponse(dohData);
       }
 
-      // 9. GeoIP Lookup
+      // 9. GeoIP Lookup (single)
       if (pathname === '/api/geoip') {
         const ip = url.searchParams.get('ip') || '';
         const geoRes = await fetch(`https://ipwho.is/${ip}`);
         const geoData = await geoRes.json();
         return jsonResponse(geoData);
+      }
+
+      // 9b. Real bulk GeoIP lookup — proxies to ip-api.com's batch endpoint
+      // (up to 100 IPs per real HTTP request, no API key needed). This is
+      // what powers "which country is this proxy in" for the proxy
+      // injector: genuine MaxMind-derived geolocation data, not a guess.
+      if (pathname === '/api/geoip/batch' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const ips = Array.isArray(body.ips) ? body.ips.filter(ip => typeof ip === 'string').slice(0, 100) : [];
+        if (!ips.length) return jsonResponse({ success: false, error: 'ips[] is required' }, 400);
+
+        // ip-api.com's free batch tier is HTTP-only; that's fine here since
+        // this fetch happens server-side inside the Worker, not the browser,
+        // so there is no mixed-content restriction.
+        const geoRes = await fetch('http://ip-api.com/batch?fields=status,message,country,countryCode,city,isp,query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(ips)
+        });
+        if (!geoRes.ok) return jsonResponse({ success: false, error: `ip-api.com پاسخ ${geoRes.status} داد` }, 502);
+        const geoData = await geoRes.json();
+        return jsonResponse({ success: true, results: geoData });
       }
 
       // 10. Direct Client Subscription Provider Endpoint (/sub)

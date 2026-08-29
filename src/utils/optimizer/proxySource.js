@@ -157,6 +157,48 @@ export async function fetchEdtFeed(type, workerUrl) {
 }
 
 /**
+ * Convert a 2-letter country code to an emoji flag.
+ */
+export function countryCodeToFlag(cc) {
+  if (!cc || cc.length !== 2) return '🏳️';
+  const codePoints = [...cc.toUpperCase()].map(c => 0x1F1E6 + (c.charCodeAt(0) - 65));
+  return String.fromCodePoint(...codePoints);
+}
+
+/**
+ * Real bulk GeoIP lookup for a batch of proxy IPs, via the Worker's
+ * /api/geoip/batch endpoint (ip-api.com's real batch API — genuine
+ * MaxMind-derived country/city data, not a guess).
+ */
+export async function lookupProxyCountries(list, workerUrl) {
+  if (!workerUrl) throw new Error('برای تشخیص کشور پروکسی‌ها، آدرس Worker را در تنظیمات وارد کنید.');
+  const uniqueIps = [...new Set(list.map(p => p.ip))];
+  const chunks = [];
+  for (let i = 0; i < uniqueIps.length; i += 100) chunks.push(uniqueIps.slice(i, i + 100));
+
+  const geoByIp = {};
+  for (const chunk of chunks) {
+    try {
+      const res = await fetch(`${workerUrl.replace(/\/$/, '')}/api/geoip/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ips: chunk })
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (!data.success) continue;
+      data.results.forEach(r => {
+        if (r.status === 'success') {
+          geoByIp[r.query] = { country: r.country, countryCode: r.countryCode, city: r.city, isp: r.isp };
+        }
+      });
+    } catch { /* this chunk failed */ }
+  }
+
+  return list.map(p => ({ ...p, ...(geoByIp[p.ip] || { country: null, countryCode: null, city: null, isp: null }) }));
+}
+
+/**
  * Real liveness check for a batch of fetched proxies via Worker TCP probe.
  */
 export async function probeProxyBatch(list, workerUrl, { concurrency = 25, timeoutMs = 20000 } = {}) {

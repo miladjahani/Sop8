@@ -58,6 +58,10 @@
           <span v-if="testingLive" class="spinner"></span>
           {{ testingLive ? 'در حال تست...' : '🧪 تست زنده بودن (TCP)' }}
         </button>
+        <button @click="detectCountries" :disabled="detectingGeo || !hasWorker" class="btn small secondary">
+          <span v-if="detectingGeo" class="spinner"></span>
+          {{ detectingGeo ? 'در حال تشخیص...' : '🌍 تشخیص کشور واقعی (GeoIP)' }}
+        </button>
         <button @click="clearList" class="btn small secondary">🗑️ پاکسازی لیست</button>
         <span class="count-badge">{{ proxyList.length }} پروکسی</span>
       </div>
@@ -149,7 +153,7 @@
 
 <script setup>
 import { ref, computed } from 'vue';
-import { fetchProxyFeed, fetchEdtFeed, probeProxyBatch, PROXY_FEEDS, EDT_FEEDS } from '../../utils/optimizer/proxySource';
+import { fetchProxyFeed, fetchEdtFeed, probeProxyBatch, lookupProxyCountries, PROXY_FEEDS, EDT_FEEDS } from '../../utils/optimizer/proxySource';
 import { getWorkerUrl } from '../../utils/workerApi';
 
 const emit = defineEmits(['update:frontProxy']);
@@ -173,6 +177,7 @@ const manualPort = ref('');
 const manualUser = ref('');
 const manualPass = ref('');
 
+const detectingGeo = ref(false);
 const hasWorker = computed(() => !!getWorkerUrl());
 
 const hasRichData = computed(() => proxyList.value.some(p => p.countryCode || p.asOrg));
@@ -272,6 +277,27 @@ async function testAllLive() {
     feedMsg.value = `❌ ${e.message}`;
   } finally {
     testingLive.value = false;
+  }
+}
+
+async function detectCountries() {
+  if (!proxyList.value.length) return;
+  detectingGeo.value = true;
+  try {
+    const worker = getWorkerUrl();
+    const batch = proxyList.value.slice(0, 200);
+    const withGeo = await lookupProxyCountries(batch, worker);
+    const byKey = {};
+    withGeo.forEach(p => { byKey[`${p.ip}:${p.port}`] = p; });
+    proxyList.value = proxyList.value.map(p => byKey[`${p.ip}:${p.port}`] || p);
+    const found = withGeo.filter(p => p.countryCode).length;
+    feedOk.value = true;
+    feedMsg.value = `🌍 کشور ${found} پروکسی از ${batch.length} پروکسی تشخیص داده شد.`;
+  } catch (e) {
+    feedOk.value = false;
+    feedMsg.value = `❌ ${e.message}`;
+  } finally {
+    detectingGeo.value = false;
   }
 }
 

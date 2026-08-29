@@ -376,9 +376,10 @@ export default {
       // 2. Single-IP probe
       if (pathname === '/api/probe') {
         const ip = url.searchParams.get('ip') || url.searchParams.get('host');
-        const port = url.searchParams.get('port') || '443';
+        const port = parseInt(url.searchParams.get('port'), 10) || 443;
         const withColo = url.searchParams.get('colo') === '1';
         if (!ip || !isValidIp(ip)) return jsonResponse({ error: 'Valid IP is required' }, 400);
+        if (port < 1 || port > 65535) return jsonResponse({ error: 'Invalid port number' }, 400);
 
         const tcp = await tcpProbe(ip, port, 3500);
         if (!withColo) return jsonResponse({ success: tcp.status === 'ok', ...tcp });
@@ -386,7 +387,7 @@ export default {
         const colo = await coloProbe(ip, 4000);
         return jsonResponse({
           success: tcp.status === 'ok' || colo.status === 'ok',
-          ip, port: Number(port),
+          ip, port,
           latency: tcp.latency,
           status: tcp.status,
           colo: colo.colo, city: colo.city, warp: colo.warp,
@@ -423,7 +424,7 @@ export default {
           if (mode === 'colo') return coloProbe(ip, 4000);
           const [tcp, colo] = await Promise.all([tcpProbe(ip, port, 3000), coloProbe(ip, 4000)]);
           return {
-            ip, port: Number(port),
+            ip, port,
             latency: tcp.latency,
             status: tcp.status === 'ok' ? 'ok' : (colo.status === 'ok' ? 'ok' : 'error'),
             colo: colo.colo, city: colo.city, warp: colo.warp,

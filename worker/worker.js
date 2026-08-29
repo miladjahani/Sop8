@@ -288,6 +288,7 @@ const RATE_LIMIT_WINDOW = 60000; // 1 minute
 const RATE_LIMIT_MAX = 30; // max requests per window
 
 function checkRateLimit(ip) {
+  cleanupRateLimit(); // Lazy cleanup
   const now = Date.now();
   const record = rateLimitMap.get(ip);
   if (!record || now - record.start > RATE_LIMIT_WINDOW) {
@@ -299,13 +300,14 @@ function checkRateLimit(ip) {
   return true;
 }
 
-// Clean up old entries periodically
-setInterval(() => {
+// Lazy cleanup: done inside checkRateLimit instead of setInterval
+function cleanupRateLimit() {
+  if (rateLimitMap.size < 100) return; // Only clean when map gets large
   const now = Date.now();
   for (const [ip, record] of rateLimitMap) {
     if (now - record.start > RATE_LIMIT_WINDOW * 2) rateLimitMap.delete(ip);
   }
-}, 60000);
+}
 
 // ─── Cloudflare IP Ranges ───
 const CLOUDFLARE_IPV4_CIDRS = [

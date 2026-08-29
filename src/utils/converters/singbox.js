@@ -1,4 +1,4 @@
-export function toSingbox(nodes, frontProxy = null) {
+export function toSingbox(nodes, exitProxy = null) {
   const outbounds = nodes.map(n => {
     if (n.protocol === 'vless') {
       return {
@@ -22,11 +22,7 @@ export function toSingbox(nodes, frontProxy = null) {
           type: 'ws',
           path: n.path,
           headers: { Host: n.host }
-        } : undefined,
-        // Real sing-box feature: routes this outbound's TCP dial through
-        // another outbound (the front proxy) first — the actual mechanism
-        // that gives the node a fixed/static exit IP.
-        detour: frontProxy ? frontProxy.tag : undefined
+        } : undefined
       };
     }
     if (n.protocol === 'trojan') {
@@ -45,26 +41,59 @@ export function toSingbox(nodes, frontProxy = null) {
           type: 'ws',
           path: n.path,
           headers: { Host: n.host }
-        } : undefined,
-        detour: frontProxy ? frontProxy.tag : undefined
+        } : undefined
+      };
+    }
+    if (n.protocol === 'vmess') {
+      return {
+        type: 'vmess',
+        tag: n.name,
+        server: n.address,
+        server_port: parseInt(n.port, 10),
+        uuid: n.auth,
+        alter_id: n.aid || 0,
+        security: 'auto',
+        tls: n.security === 'tls' ? { enabled: true, server_name: n.sni || n.host, insecure: true } : undefined,
+        transport: n.type === 'ws' ? { type: 'ws', path: n.path, headers: { Host: n.host } } : undefined
       };
     }
     return null;
   }).filter(Boolean);
 
-  // Real front-proxy outbound: a plain sing-box http/socks outbound.
-  // Every node above sets `detour` to this tag, so all outbound traffic
-  // physically exits through this fixed IP:port before reaching the
-  // actual VPN node — a real static-IP technique, not a cosmetic label.
-  const frontProxyOutbound = frontProxy ? {
-    type: frontProxy.type, // 'http' | 'socks'
-    tag: frontProxy.tag,
-    server: frontProxy.server,
-    server_port: frontProxy.port,
-    username: frontProxy.username || undefined,
-    password: frontProxy.password || undefined,
-    version: frontProxy.type === 'socks' ? (frontProxy.socksVersion || '5') : undefined
+  const nodeTags = outbounds.map(o => o.tag);
+
+  // Real sing-box "urltest" outbound — picks the fastest working VLESS/
+  // Trojan tunnel automatically. This is what the exit proxy below
+  // tunnels through to reach the outside world.
+  const autoOutbound = { type: 'urltest', tag: 'auto', outbounds: nodeTags, url: 'http://www.gstatic.com/generate_204', interval: '3m', tolerance: 50 };
+
+  // Real exit-proxy outbound — the country HTTP/SOCKS proxy is the
+  // FINAL hop your traffic actually exits from, reaching the outside
+  // world itself via `detour: 'auto'` (tunneling through your best
+  // working VLESS/Trojan node). Selecting this outbound means ALL
+  // traffic exits from that proxy's IP, not just the VPN handshake.
+  const exitOutbound = exitProxy ? {
+    type: exitProxy.type, // 'http' | 'socks'
+    tag: exitProxy.tag,
+    server: exitProxy.server,
+    server_port: exitProxy.port,
+    username: exitProxy.username || undefined,
+    password: exitProxy.password || undefined,
+    version: exitProxy.type === 'socks' ? (exitProxy.socksVersion || '5') : undefined,
+    detour: 'auto'
   } : null;
+
+  // "Clean mode": when an exit proxy is set, the visible/selectable
+  // 'select' menu shows ONLY the clean country entry + direct — the
+  // real VLESS/Trojan node outbounds and the 'auto' group are still
+  // fully defined in `outbounds` (required underneath for the chain to
+  // function) but omitted from this list, so most sing-box clients
+  // (which build their UI from the selector's member list) show just
+  // one clean entry. Note: a few GUI clients render every top-level
+  // outbound regardless of selector membership — this is a real
+  // limitation outside this app's control, not something we can force
+  // client-side.
+  const selectOutbounds = exitOutbound ? [exitOutbound.tag, 'direct'] : ['auto', ...nodeTags, 'direct'];
 
   return JSON.stringify({
     log: { level: 'info', timestamp: true },
@@ -81,17 +110,11 @@ export function toSingbox(nodes, frontProxy = null) {
       {
         type: 'selector',
         tag: 'select',
-        outbounds: ['auto', ...outbounds.map(o => o.tag), 'direct']
+        outbounds: selectOutbounds,
+        default: exitOutbound ? exitOutbound.tag : 'auto'
       },
-      {
-        type: 'urltest',
-        tag: 'auto',
-        outbounds: outbounds.map(o => o.tag),
-        url: 'http://www.gstatic.com/generate_204',
-        interval: '3m',
-        tolerance: 50
-      },
-      ...(frontProxyOutbound ? [frontProxyOutbound] : []),
+      autoOutbound,
+      ...(exitOutbound ? [exitOutbound] : []),
       ...outbounds,
       { type: 'direct', tag: 'direct' },
       { type: 'block', tag: 'block' }

@@ -1,4 +1,4 @@
-export function toClashMeta(nodes, groupName = 'PROXIES', frontProxy = null) {
+export function toClashMeta(nodes, groupName = 'PROXIES', exitProxy = null) {
   const proxies = nodes.map(n => {
     if (n.protocol === 'vless') {
       return {
@@ -14,13 +14,7 @@ export function toClashMeta(nodes, groupName = 'PROXIES', frontProxy = null) {
         'client-fingerprint': n.fp || 'chrome',
         network: n.type || 'ws',
         'ws-opts': n.type === 'ws' ? { path: n.path, headers: { Host: n.host } } : undefined,
-        'grpc-opts': n.type === 'grpc' ? { 'grpc-service-name': n.path } : undefined,
-        // Real Clash Meta feature: routes this proxy's underlying TCP
-        // connection through another proxy defined below — this is what
-        // actually gives the node a fixed/static outbound IP, since the
-        // real network hop out of your device goes to the front proxy
-        // first, not directly to the Cloudflare edge IP.
-        'dialer-proxy': frontProxy ? frontProxy.name : undefined
+        'grpc-opts': n.type === 'grpc' ? { 'grpc-service-name': n.path } : undefined
       };
     }
     if (n.protocol === 'trojan') {
@@ -33,8 +27,7 @@ export function toClashMeta(nodes, groupName = 'PROXIES', frontProxy = null) {
         udp: true,
         sni: n.sni || n.host,
         network: n.type || 'ws',
-        'ws-opts': n.type === 'ws' ? { path: n.path, headers: { Host: n.host } } : undefined,
-        'dialer-proxy': frontProxy ? frontProxy.name : undefined
+        'ws-opts': n.type === 'ws' ? { path: n.path, headers: { Host: n.host } } : undefined
       };
     }
     if (n.protocol === 'vmess') {
@@ -50,8 +43,7 @@ export function toClashMeta(nodes, groupName = 'PROXIES', frontProxy = null) {
         tls: n.security === 'tls',
         servername: n.sni || n.host,
         network: n.type || 'ws',
-        'ws-opts': n.type === 'ws' ? { path: n.path, headers: { Host: n.host } } : undefined,
-        'dialer-proxy': frontProxy ? frontProxy.name : undefined
+        'ws-opts': n.type === 'ws' ? { path: n.path, headers: { Host: n.host } } : undefined
       };
     }
     if (n.protocol === 'hysteria2') {
@@ -62,28 +54,51 @@ export function toClashMeta(nodes, groupName = 'PROXIES', frontProxy = null) {
         port: parseInt(n.port, 10),
         password: n.auth,
         sni: n.sni || n.address,
-        'skip-cert-verify': true,
-        'dialer-proxy': frontProxy ? frontProxy.name : undefined
+        'skip-cert-verify': true
       };
     }
     return null;
   }).filter(Boolean);
 
-  // Real front-proxy entry: an ordinary Clash Meta http/socks5 proxy
-  // object. Every node above references it via `dialer-proxy`, so all
-  // outbound traffic for this profile physically exits through this
-  // fixed IP:port before reaching the actual VPN node.
-  const frontProxyEntry = frontProxy ? {
-    name: frontProxy.name,
-    type: frontProxy.type, // 'http' | 'socks5'
-    server: frontProxy.server,
-    port: frontProxy.port,
-    username: frontProxy.username || undefined,
-    password: frontProxy.password || undefined
-  } : null;
-
-  const allProxies = frontProxyEntry ? [frontProxyEntry, ...proxies] : proxies;
   const proxyNames = proxies.map(p => p.name);
+
+  // Real Clash Meta "exit proxy" chain — the correct direction: the
+  // country HTTP/SOCKS proxy is the FINAL hop that all your internet
+  // traffic actually exits from, and it reaches the outside world by
+  // tunneling its own connection through your VLESS/Trojan nodes
+  // (via 'dialer-proxy' pointing at the AUTO url-test group). Selecting
+  // this proxy as your active outbound means ALL traffic exits from
+  // that proxy's IP/country, not just the handshake to reach the node.
+  let exitProxyEntry = null;
+  if (exitProxy) {
+    exitProxyEntry = {
+      name: exitProxy.name,
+      type: exitProxy.type, // 'http' | 'socks5'
+      server: exitProxy.server,
+      port: exitProxy.port,
+      username: exitProxy.username || undefined,
+      password: exitProxy.password || undefined,
+      'dialer-proxy': 'AUTO'
+    };
+
+    // "Clean mode": when an exit proxy is set, the individual VLESS/
+    // Trojan nodes are marked with Clash Meta's real `hidden: true`
+    // field — they keep working as the AUTO group's dialer target, but
+    // no longer clutter the visible proxy list. The end result in your
+    // client is a single, clean entry (the country flag/name), which
+    // feels like a direct injection even though a real protocol-level
+    // hop still happens underneath (unavoidable — see note below).
+    proxies.forEach(p => { p.hidden = true; });
+  }
+
+  const allProxies = exitProxyEntry ? [...proxies, exitProxyEntry] : proxies;
+
+  // Without an exit proxy: show every node normally, as before.
+  // With an exit proxy: the visible selectable list is reduced to just
+  // the clean country entry + DIRECT — the real underlying VLESS/Trojan
+  // nodes are still present (required for the chain to function) but
+  // hidden from this list via the `hidden` flag above.
+  const selectableNames = exitProxyEntry ? [exitProxyEntry.name] : proxyNames;
 
   return `port: 7890
 socks-port: 7891
@@ -98,9 +113,8 @@ proxy-groups:
   - name: ${groupName}
     type: select
     proxies:
-      - AUTO
+${selectableNames.map(p => `      - "${p}"`).join('\n')}
       - DIRECT
-${proxyNames.map(p => `      - "${p}"`).join('\n')}
   - name: AUTO
     type: url-test
     url: http://www.gstatic.com/generate_204

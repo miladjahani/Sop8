@@ -12,9 +12,6 @@
  */
 
 import { connect } from 'cloudflare:sockets';
-import { extractRegion, countryCodeToFlag, getUniqueRegions } from './geo-utils.js';
-import { parseNodeUrl, parseSubscription } from './node-parser.js';
-import { runOperatorChain } from './operator-runner.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -28,6 +25,261 @@ const JSON_HEADERS = { ...CORS_HEADERS, 'Content-Type': 'application/json; chars
 
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: JSON_HEADERS });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Geo Utilities — Region detection & emoji flags (from geo-utils.js)
+// ═══════════════════════════════════════════════════════════════════
+const REGION_KEYWORDS = {
+  '香港': ['HK', 'HKG', 'HKT', '香港', 'Hong Kong'], '台湾': ['TW', 'TPE', '台湾', '台北', 'Taiwan'],
+  '新加坡': ['SG', 'SIN', '新加坡', 'Singapore'], '日本': ['JP', 'JPN', 'NRT', '日本', 'Japan', 'Tokyo'],
+  '美国': ['US', 'USA', 'LAX', 'SFO', '美国', 'United States', 'America'], '韩国': ['KR', 'KOR', 'ICN', '韩国', 'Korea'],
+  '英国': ['UK', 'GB', 'LHR', '英国', 'London'], '德国': ['DE', 'DEU', 'FRA', '德国', 'Germany'],
+  '法国': ['FR', 'CDG', '法国', 'France', 'Paris'], '加拿大': ['CA', 'CAN', 'YVR', 'YYZ', '加拿大'],
+  '澳大利亚': ['AU', 'AUS', 'SYD', 'MEL', '澳大利亚', 'Australia'], '荷兰': ['NL', 'NLD', 'AMS', '荷兰'],
+  '俄罗斯': ['RU', 'RUS', 'SVO', '俄罗斯', 'Russia'], '印度': ['IN', 'IND', 'BOM', '印度', 'India'],
+  '土耳其': ['TR', 'TUR', 'IST', '土耳其', 'Turkey'], '马来西亚': ['MY', 'MYS', 'KUL', '马来西亚'],
+  '泰国': ['TH', 'THA', 'BKK', '泰国', 'Thailand'], '越南': ['VN', 'VNM', '越南', 'Vietnam'],
+  '巴西': ['BR', 'BRA', 'GRU', '巴西', 'Brazil'], '意大利': ['IT', 'ITA', 'FCO', '意大利', 'Italy'],
+  '西班牙': ['ES', 'ESP', 'MAD', '西班牙', 'Spain'], '瑞士': ['CH', 'CHE', 'ZRH', '瑞士'],
+  '波兰': ['PL', 'POL', 'WAW', '波兰', 'Poland'], '瑞典': ['SE', 'SWE', '瑞典', 'Sweden'],
+  '挪威': ['NO', 'NOR', 'OSL', '挪威', 'Norway'], '丹麦': ['DK', 'DNK', 'CPH', '丹麦'],
+  '芬兰': ['FI', 'FIN', 'HEL', '芬兰', 'Finland'], '奥地利': ['AT', 'AUT', '奥地利'],
+  '阿联酋': ['AE', 'ARE', 'DXB', 'UAE', 'Dubai'], '沙特': ['SA', 'SAU', '沙特'],
+  '以色列': ['IL', 'ISR', 'TLV', '以色列', 'Israel'], '南非': ['ZA', 'ZAF', '南非'],
+  '墨西哥': ['MX', 'MEX', '墨西哥'], '阿根廷': ['AR', 'ARG', '阿根廷'],
+  '哥伦比亚': ['CO', 'COL', '哥伦比亚'], '埃及': ['EG', 'EGY', '埃及'],
+  '菲律宾': ['PH', 'PHL', '菲律宾'], '印尼': ['ID', 'IDN', 'CGK', '印尼'],
+};
+const REGION_EMOJI = {
+  '香港': '🇭🇰', '台湾': '🇹🇼', '新加坡': '🇸🇬', '日本': '🇯🇵', '美国': '🇺🇸', '韩国': '🇰🇷',
+  '英国': '🇬🇧', '德国': '🇩🇪', '法国': '🇫🇷', '加拿大': '🇨🇦', '澳大利亚': '🇦🇺', '荷兰': '🇳🇱',
+  '俄罗斯': '🇷🇺', '印度': '🇮🇳', '土耳其': '🇹🇷', '马来西亚': '🇲🇾', '泰国': '🇹🇭', '越南': '🇻🇳',
+  '巴西': '🇧🇷', '意大利': '🇮🇹', '西班牙': '🇪🇸', '瑞士': '🇨🇭', '波兰': '🇵🇱', '瑞典': '🇸🇪',
+  '挪威': '🇳🇴', '丹麦': '🇩🇰', '芬兰': '🇫🇮', '奥地利': '🇦🇹', '阿联酋': '🇦🇪', '沙特': '🇸🇦',
+  '以色列': '🇮🇱', '南非': '🇿🇦', '墨西哥': '🇲🇽', '阿根廷': '🇦🇷', '哥伦比亚': '🇨🇴', '埃及': '🇪🇬',
+  '菲律宾': '🇵🇭', '印尼': '🇮🇩',
+};
+function extractRegion(name) {
+  if (!name) return { region: '未知', emoji: '🌍' };
+  for (const [region, keywords] of Object.entries(REGION_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (name.includes(kw)) return { region, emoji: REGION_EMOJI[region] || '🌍' };
+    }
+  }
+  return { region: '未知', emoji: '🌍' };
+}
+function getUniqueRegions(nodeNames) {
+  const regions = new Set();
+  for (const name of nodeNames) { const { region } = extractRegion(name); if (region !== '未知') regions.add(region); }
+  return [...regions].sort();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Node Parser — Parse proxy URLs (from node-parser.js)
+// ═══════════════════════════════════════════════════════════════════
+function parseNodeUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const t = url.trim();
+  if (t.startsWith('vless://')) return parseVless(t);
+  if (t.startsWith('vmess://')) return parseVmess(t);
+  if (t.startsWith('trojan://')) return parseTrojan(t);
+  if (t.startsWith('ss://')) return parseSS(t);
+  if (t.startsWith('hysteria2://') || t.startsWith('hy2://')) return parseHy2(t);
+  if (t.startsWith('tuic://')) return parseTuic(t);
+  if (t.startsWith('socks5://') || t.startsWith('socks://')) return parseSocks(t);
+  if (t.startsWith('http://') || t.startsWith('https://')) return parseHttp(t);
+  return null;
+}
+function parseVless(url) {
+  try {
+    const h = url.lastIndexOf('#'); const name = h >= 0 ? decodeURIComponent(url.slice(h+1)) : 'VLESS';
+    const body = h >= 0 ? url.slice(0, h) : url; const a = body.lastIndexOf('@');
+    if (a < 0) return null; const uuid = body.slice(8, a); const rest = body.slice(a+1);
+    const q = rest.indexOf('?'); const hp = q >= 0 ? rest.slice(0, q) : rest;
+    const params = q >= 0 ? new URLSearchParams(rest.slice(q+1)) : new URLSearchParams();
+    const c = hp.lastIndexOf(':'); const server = c >= 0 ? hp.slice(0, c) : hp;
+    const port = c >= 0 ? parseInt(hp.slice(c+1), 10) : 443;
+    return { type: 'vless', name, server, port, uuid, sni: params.get('sni') || params.get('host') || '',
+      host: params.get('host') || server, path: params.get('path') || '/', fp: params.get('fp') || '',
+      flow: params.get('flow') || '', tls: params.get('security') === 'tls' || port === 443, url };
+  } catch { return null; }
+}
+function parseVmess(url) {
+  try {
+    const obj = JSON.parse(decodeURIComponent(escape(atob(url.slice(8)))));
+    return { type: 'vmess', name: obj.ps || 'VMess', server: obj.add || obj.host || '',
+      port: parseInt(obj.port, 10) || 443, uuid: obj.id || '', sni: obj.sni || obj.host || '',
+      host: obj.host || '', path: obj.path || '/', tls: obj.tls === 'tls', url };
+  } catch { return null; }
+}
+function parseTrojan(url) {
+  try {
+    const h = url.lastIndexOf('#'); const name = h >= 0 ? decodeURIComponent(url.slice(h+1)) : 'Trojan';
+    const body = h >= 0 ? url.slice(0, h) : url; const a = body.lastIndexOf('@');
+    if (a < 0) return null; const pass = body.slice(9, a); const rest = body.slice(a+1);
+    const q = rest.indexOf('?'); const hp = q >= 0 ? rest.slice(0, q) : rest;
+    const params = q >= 0 ? new URLSearchParams(rest.slice(q+1)) : new URLSearchParams();
+    const c = hp.lastIndexOf(':'); const server = c >= 0 ? hp.slice(0, c) : hp;
+    const port = c >= 0 ? parseInt(hp.slice(c+1), 10) : 443;
+    return { type: 'trojan', name, server, port, password: pass, sni: params.get('sni') || '',
+      host: params.get('host') || server, path: params.get('path') || '/', tls: true, url };
+  } catch { return null; }
+}
+function parseSS(url) {
+  try {
+    const h = url.lastIndexOf('#'); const name = h >= 0 ? decodeURIComponent(url.slice(h+1)) : 'SS';
+    const body = h >= 0 ? url.slice(0, h) : url; const a = body.lastIndexOf('@');
+    if (a < 0) return null; const mp = body.slice(5, a); const rest = body.slice(a+1);
+    const c = rest.lastIndexOf(':'); const server = c >= 0 ? rest.slice(0, c) : rest;
+    const port = c >= 0 ? parseInt(rest.slice(c+1), 10) : 443;
+    let method = 'aes-256-gcm', password = '';
+    const pi = mp.indexOf(':'); if (pi >= 0) { method = mp.slice(0, pi); password = mp.slice(pi+1); }
+    else { try { const d = atob(mp); const i = d.indexOf(':'); if (i >= 0) { method = d.slice(0,i); password = d.slice(i+1); } } catch { password = mp; } }
+    return { type: 'ss', name, server, port, cipher: method, password, url };
+  } catch { return null; }
+}
+function parseHy2(url) {
+  try {
+    const p = url.startsWith('hy2://') ? 'hy2://' : 'hysteria2://';
+    const h = url.lastIndexOf('#'); const name = h >= 0 ? decodeURIComponent(url.slice(h+1)) : 'Hy2';
+    const body = h >= 0 ? url.slice(0, h) : url; const a = body.lastIndexOf('@');
+    if (a < 0) return null; const pass = body.slice(p.length, a); const rest = body.slice(a+1);
+    const q = rest.indexOf('?'); const hp = q >= 0 ? rest.slice(0, q) : rest;
+    const params = q >= 0 ? new URLSearchParams(rest.slice(q+1)) : new URLSearchParams();
+    const c = hp.lastIndexOf(':'); const server = c >= 0 ? hp.slice(0, c) : hp;
+    const port = c >= 0 ? parseInt(hp.slice(c+1), 10) : 443;
+    return { type: 'hysteria2', name, server, port, password: pass, sni: params.get('sni') || '', url };
+  } catch { return null; }
+}
+function parseTuic(url) {
+  try {
+    const h = url.lastIndexOf('#'); const name = h >= 0 ? decodeURIComponent(url.slice(h+1)) : 'TUIC';
+    const body = h >= 0 ? url.slice(0, h) : url; const a = body.lastIndexOf('@');
+    if (a < 0) return null; const pass = body.slice(7, a); const rest = body.slice(a+1);
+    const q = rest.indexOf('?'); const hp = q >= 0 ? rest.slice(0, q) : rest;
+    const c = hp.lastIndexOf(':'); const server = c >= 0 ? hp.slice(0, c) : hp;
+    const port = c >= 0 ? parseInt(hp.slice(c+1), 10) : 443;
+    return { type: 'tuic', name, server, port, password: pass, url };
+  } catch { return null; }
+}
+function parseSocks(url) {
+  try {
+    const p = url.startsWith('socks5://') ? 'socks5' : 'socks';
+    const h = url.lastIndexOf('#'); const name = h >= 0 ? decodeURIComponent(url.slice(h+1)) : 'SOCKS';
+    const body = h >= 0 ? url.slice(0, h) : url;
+    const a = body.slice(p.length+3); const c = a.lastIndexOf(':');
+    const server = c >= 0 ? a.slice(0, c) : a; const port = c >= 0 ? parseInt(a.slice(c+1), 10) : 1080;
+    return { type: p, name, server, port, url };
+  } catch { return null; }
+}
+function parseHttp(url) {
+  try {
+    const https = url.startsWith('https://');
+    const h = url.lastIndexOf('#'); const name = h >= 0 ? decodeURIComponent(url.slice(h+1)) : 'HTTP';
+    const body = h >= 0 ? url.slice(0, h) : url; const u = new URL(body);
+    return { type: https ? 'https' : 'http', name, server: u.hostname, port: parseInt(u.port,10) || (https?443:80), url };
+  } catch { return null; }
+}
+function parseSubscription(content) {
+  if (!content) return [];
+  let t = content; try { t = decodeURIComponent(escape(atob(t.trim()))); } catch {}
+  return t.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).map(parseNodeUrl).filter(Boolean);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Operator Runner — Node transformation pipeline (from operator-runner.js)
+// ═══════════════════════════════════════════════════════════════════
+function runOperatorChain(nodes, operators) {
+  if (!operators || !operators.length) return nodes;
+  let result = [...nodes];
+  for (const op of operators) {
+    if (!op.enabled) continue;
+    switch (op.type) {
+      case 'filter': result = opFilter(result, op.params); break;
+      case 'sort': result = opSort(result, op.params); break;
+      case 'dedup': result = opDedup(result, op.params); break;
+      case 'rename': result = opRename(result, op.params); break;
+    }
+  }
+  return result;
+}
+function opFilter(nodes, params) {
+  if (!params) return nodes;
+  let result = [...nodes];
+  if (params.include?.enabled && params.include.rules?.length) {
+    const rules = params.include.rules.map(r => typeof r === 'string' ? r : r.pattern || '').filter(Boolean);
+    result = result.filter(n => rules.some(r => { try { return new RegExp(r, 'i').test(n.name); } catch { return n.name.toLowerCase().includes(r.toLowerCase()); } }));
+  }
+  if (params.exclude?.enabled && params.exclude.rules?.length) {
+    const rules = params.exclude.rules.map(r => typeof r === 'string' ? r : r.pattern || '').filter(Boolean);
+    result = result.filter(n => !rules.some(r => { try { return new RegExp(r, 'i').test(n.name); } catch { return n.name.toLowerCase().includes(r.toLowerCase()); } }));
+  }
+  if (params.protocols?.enabled && params.protocols.values?.length) {
+    const allowed = new Set(params.protocols.values.map(p => p.toLowerCase()));
+    result = result.filter(n => allowed.has((n.type || '').toLowerCase()));
+  }
+  if (params.regions?.enabled && params.regions.values?.length) {
+    const allowed = new Set(params.regions.values);
+    result = result.filter(n => allowed.has(extractRegion(n.name).region));
+  }
+  return result;
+}
+function opSort(nodes, params) {
+  if (!params?.keys?.length) return nodes;
+  const result = [...nodes];
+  result.sort((a, b) => {
+    for (const { key, order = 'asc' } of params.keys) {
+      let va, vb;
+      switch (key) {
+        case 'name': va = a.name||''; vb = b.name||''; break;
+        case 'server': va = a.server||''; vb = b.server||''; break;
+        case 'port': va = a.port||0; vb = b.port||0; break;
+        case 'protocol': va = a.type||''; vb = b.type||''; break;
+        case 'region': va = extractRegion(a.name).region; vb = extractRegion(b.name).region; break;
+        default: va = ''; vb = '';
+      }
+      const cmp = typeof va === 'number' ? va - vb : String(va).localeCompare(String(vb));
+      if (cmp !== 0) return order === 'asc' ? cmp : -cmp;
+    }
+    return 0;
+  });
+  return result;
+}
+function opDedup(nodes, params) {
+  if (!params) return nodes;
+  const seen = new Set();
+  return nodes.filter(n => {
+    const key = params.mode === 'name' ? n.name : `${n.server}:${n.port}`;
+    if (seen.has(key)) return false; seen.add(key); return true;
+  });
+}
+function opRename(nodes, params) {
+  if (!params) return nodes;
+  let result = [...nodes];
+  if (params.regex?.enabled && params.regex.rules?.length) {
+    result = result.map(n => {
+      let name = n.name;
+      for (const rule of params.regex.rules) {
+        try {
+          const [pat, rep] = typeof rule === 'object' ? [new RegExp(rule.pattern||'', rule.flags||'gi'), rule.replacement||''] : [new RegExp(rule, 'gi'), ''];
+          name = name.replace(pat, rep);
+        } catch {}
+      }
+      return name !== n.name ? { ...n, name } : n;
+    });
+  }
+  if (params.template?.enabled && params.template.template) {
+    let idx = params.template.offset || 1;
+    result = result.map(n => {
+      const { region, emoji } = extractRegion(n.name);
+      const tpl = params.template.template.replace('{emoji}', emoji).replace('{region}', region)
+        .replace('{protocol}', n.type||'').replace('{index}', String(idx).padStart(2,'0'))
+        .replace('{server}', n.server||'').replace('{port}', String(n.port||''));
+      idx++; return { ...n, name: tpl };
+    });
+  }
+  return result;
 }
 
 // ─── Rate Limiter (simple in-memory per-IP) ───

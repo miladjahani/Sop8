@@ -22,15 +22,16 @@
 
       <!-- Desktop Nav -->
       <nav class="desktop-nav">
-        <button 
-          v-for="tab in tabs" 
+        <router-link
+          v-for="tab in tabs"
           :key="tab.id"
-          :class="['nav-btn', { active: currentTab === tab.id }]"
-          @click="$emit('change-tab', tab.id)"
+          :to="tab.route"
+          class="nav-btn"
+          active-class="active"
         >
           <span class="nav-icon">{{ tab.icon }}</span>
           <span class="nav-label">{{ tab.label }}</span>
-        </button>
+        </router-link>
       </nav>
     </div>
   </header>
@@ -39,11 +40,13 @@
 <script setup>
 import { appState } from '../../stores/appState';
 
-defineProps({
-  currentTab: String,
-  tabs: Array
-});
-defineEmits(['change-tab']);
+const tabs = [
+  { id: 'optimizer', route: '/optimizer', label: '⚡ بهینه‌ساز', icon: '⚡' },
+  { id: 'scanner', route: '/scanner', label: '🧪 اسکنر IP', icon: '🧪' },
+  { id: 'misub', route: '/misub', label: '📋 سابسکریپشن', icon: '📋' },
+  { id: 'tools', route: '/tools', label: '🌐 ابزارها', icon: '🌐' },
+  { id: 'settings', route: '/settings', label: '🛠️ تنظیمات', icon: '🛠️' }
+];
 </script>
 
 <style scoped>
@@ -100,7 +103,6 @@ defineEmits(['change-tab']);
   border: 1px solid rgba(56, 189, 248, 0.12);
   letter-spacing: 0.03em;
 }
-
 .live-status-pill {
   display: flex;
   align-items: center;
@@ -126,7 +128,6 @@ defineEmits(['change-tab']);
   from { opacity: 0.3; transform: scale(0.8); }
   to { opacity: 1; transform: scale(1.3); }
 }
-
 .desktop-nav {
   display: flex;
   gap: 6px;
@@ -145,7 +146,7 @@ defineEmits(['change-tab']);
   cursor: pointer;
   transition: all 0.25s var(--ease-smooth);
   backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  text-decoration: none;
 }
 .nav-btn:hover {
   background: rgba(37, 99, 235, 0.15);
@@ -154,7 +155,7 @@ defineEmits(['change-tab']);
 }
 .nav-btn.active {
   background: linear-gradient(135deg, rgba(37, 99, 235, 0.50), rgba(56, 189, 248, 0.30));
-  color: #fff;
+  color: #fff !important;
   border-color: rgba(56, 189, 248, 0.35);
   box-shadow: 0 0 16px rgba(37, 99, 235, 0.20), inset 0 1px 0 rgba(255,255,255,0.06);
 }

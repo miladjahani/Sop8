@@ -1,47 +1,24 @@
 <template>
   <div class="app-layout">
     <!-- Top Header -->
-    <Header 
-      :current-tab="appState.activeTab" 
-      :tabs="tabs" 
-      @change-tab="switchTab" 
-    />
+    <Header />
 
     <!-- Main Workspace Views -->
     <main class="main-content">
       <div class="container">
-        <OptimizerView 
-          v-show="appState.activeTab === 'optimizer'"
-          @navigate="switchTab"
-        />
-        <ScannerView 
-          v-show="appState.activeTab === 'scanner'"
-          @navigate="switchTab"
-        />
-        <SubscriptionsView 
-          v-show="appState.activeTab === 'misub'"
-          @navigate="switchTab"
-        />
-        <ToolsView 
-          v-show="appState.activeTab === 'tools'"
-          @navigate="switchTab"
-        />
-        <SettingsView 
-          v-show="appState.activeTab === 'settings'"
-          @navigate="switchTab"
-        />
+        <router-view v-slot="{ Component }">
+          <transition name="page-fade" mode="out-in">
+            <component :is="Component" />
+          </transition>
+        </router-view>
       </div>
     </main>
 
     <!-- Mobile Bottom Nav -->
-    <MobileNav 
-      :current-tab="appState.activeTab" 
-      :tabs="tabs" 
-      @change-tab="switchTab" 
-    />
+    <MobileNav />
 
     <!-- Toast Notifications -->
-    <Toast :notifications="appState.notifications" />
+    <Toast />
 
     <!-- Footer -->
     <Footer />
@@ -49,31 +26,10 @@
 </template>
 
 <script setup>
-import { appState } from './stores/appState';
-
 import Header from './components/layout/Header.vue';
 import MobileNav from './components/layout/MobileNav.vue';
 import Footer from './components/layout/Footer.vue';
 import Toast from './components/layout/Toast.vue';
-
-import OptimizerView from './views/OptimizerView.vue';
-import ScannerView from './views/ScannerView.vue';
-import SubscriptionsView from './views/SubscriptionsView.vue';
-import ToolsView from './views/ToolsView.vue';
-import SettingsView from './views/SettingsView.vue';
-
-const tabs = [
-  { id: 'optimizer', label: '⚡ بهینه‌ساز', shortLabel: 'بهینه‌ساز', icon: '⚡' },
-  { id: 'scanner', label: '🧪 اسکنر IP', shortLabel: 'اسکنر', icon: '🧪' },
-  { id: 'misub', label: '📋 سابسکریپشن', shortLabel: 'ساب', icon: '📋' },
-  { id: 'tools', label: '🌐 ابزارها', shortLabel: 'ابزارها', icon: '🌐' },
-  { id: 'settings', label: '🛠️ تنظیمات', shortLabel: 'تنظیمات', icon: '🛠️' }
-];
-
-const switchTab = (tabId) => {
-  appState.activeTab = tabId;
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-};
 </script>
 
 <style scoped>
@@ -95,5 +51,18 @@ const switchTab = (tabId) => {
   .app-layout {
     padding-bottom: 0;
   }
+}
+
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
 }
 </style>

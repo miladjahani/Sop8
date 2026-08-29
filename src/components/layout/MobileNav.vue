@@ -1,23 +1,26 @@
 <template>
   <nav class="mobile-bottom-nav">
-    <button 
-      v-for="tab in tabs" 
+    <router-link
+      v-for="tab in tabs"
       :key="tab.id"
-      :class="['bottom-btn', { active: currentTab === tab.id }]"
-      @click="$emit('change-tab', tab.id)"
+      :to="tab.route"
+      class="bottom-btn"
+      active-class="active"
     >
       <span class="btn-icon">{{ tab.icon }}</span>
-      <span class="btn-text">{{ tab.shortLabel || tab.label }}</span>
-    </button>
+      <span class="btn-text">{{ tab.shortLabel }}</span>
+    </router-link>
   </nav>
 </template>
 
 <script setup>
-defineProps({
-  currentTab: String,
-  tabs: Array
-});
-defineEmits(['change-tab']);
+const tabs = [
+  { id: 'optimizer', route: '/optimizer', icon: '⚡', shortLabel: 'بهینه‌ساز' },
+  { id: 'scanner', route: '/scanner', icon: '🧪', shortLabel: 'اسکنر' },
+  { id: 'misub', route: '/misub', icon: '📋', shortLabel: 'ساب' },
+  { id: 'tools', route: '/tools', icon: '🌐', shortLabel: 'ابزارها' },
+  { id: 'settings', route: '/settings', icon: '🛠️', shortLabel: 'تنظیمات' }
+];
 </script>
 
 <style scoped>
@@ -48,6 +51,7 @@ defineEmits(['change-tab']);
   cursor: pointer;
   transition: all 0.25s var(--ease-smooth);
   position: relative;
+  text-decoration: none;
 }
 .bottom-btn:active {
   transform: scale(0.92);
